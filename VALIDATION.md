@@ -52,3 +52,21 @@ invalid selections, source size limits, corrupt/encrypted PDFs, failed-write
 cleanup and private output access. PDF imports now validate before writing.
 TypeScript and Android JavaScript export pass. Physical-device UI testing
 remains outstanding; this is source work, not a deployed release.
+
+## Full-text extraction pass
+
+Added a selectable full-text screen and temporary .txt export, replacing the
+900-character popup. Embedded text is extracted page by page; pages without
+embedded text try local raster OCR. Unread pages and truncation are shown and
+included in exports. Signing clears saved extraction to prevent stale wording.
+Failed extraction preserves previously saved text.
+
+Extraction caps text at 200,000 characters and raster work at 20 pages, with a
+60-second cooperative processing budget and up to 10 seconds per raster/OCR
+subprocess. These are not hard limits on PDF parsing. Pages combining embedded
+text with additional image-only wording may still need manual review.
+
+41 backend tests and 17 frontend tests pass; TypeScript and Android JavaScript
+export pass. A real image-only PDF was rendered with Poppler and successfully
+read with Tesseract. Device sharing/selection and production OCR installation
+still need verification. No deployment or store submission was performed.

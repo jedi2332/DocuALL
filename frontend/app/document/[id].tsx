@@ -156,23 +156,8 @@ export default function DocumentDetail() {
     }
   };
 
-  const runOcr = async () => {
-    if (!doc) return;
-    setBusy("ocr");
-    try {
-      const result = await api.runOcr(doc.id);
-      setDoc(result.document);
-      const preview = result.text.length > 900 ? `${result.text.slice(0, 900)}...` : result.text;
-      Alert.alert("Text found", preview || "No text found.");
-    } catch (e: any) {
-      if (e instanceof ApiError && e.status === 402) {
-        Alert.alert("Text extraction is a Pro feature", "View plans or keep using your documents.", [
-          { text: "Not now", style: "cancel" }, { text: "View plans", onPress: () => router.push("/membership") },
-        ]);
-      } else Alert.alert("OCR unavailable", e?.message ?? "Please try again.");
-    } finally {
-      setBusy(null);
-    }
+  const runOcr = () => {
+    if (doc) router.push('/document/text/' + doc.id);
   };
 
   const exportPdf = async () => {
@@ -308,7 +293,7 @@ export default function DocumentDetail() {
         <ActionButton icon="paper-plane-outline" label="Request" onPress={() => router.push(`/document/request/${doc.id}`)} testID="request-signature-btn" />
         <ActionButton icon="share-outline" label="Share" onPress={share} loading={busy === "share"} testID="share-btn" />
         <ActionButton icon="mail-outline" label="Email" onPress={emailPdf} loading={busy === "email"} testID="email-btn" />
-        <ActionButton icon="scan-outline" label="OCR" onPress={runOcr} loading={busy === "ocr"} testID="ocr-btn" />
+        <ActionButton icon="scan-outline" label="Get text" onPress={runOcr} loading={busy === "ocr"} testID="ocr-btn" />
         <ActionButton icon="download-outline" label="Export" onPress={exportPdf} loading={busy === "export"} testID="export-btn" />
       </View>
     </View>

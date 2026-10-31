@@ -39,6 +39,9 @@ export interface DocumentDTO {
   thumbnail_path?: string;
   created_at: string;
   updated_at: string;
+  ocr_text?: string;
+  ocr_unread_pages?: number[];
+  ocr_truncated?: boolean;
 }
 
 export interface SignatureDTO {

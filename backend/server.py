@@ -28,6 +28,7 @@ import pdf_utils
 import storage
 import billing
 import document_tools
+import text_extraction
 
 ROOT_DIR = Path(__file__).parent
 STATIC_DIR = ROOT_DIR / "static"
@@ -180,6 +181,8 @@ class DocumentOut(BaseModel):
     created_at: str
     updated_at: str
     ocr_text: Optional[str] = None
+    ocr_unread_pages: List[int] = Field(default_factory=list)
+    ocr_truncated: bool = False
 
 
 class SignatureOut(BaseModel):
@@ -484,7 +487,7 @@ async def _apply_resolved_fields(doc: dict, resolved: List[dict], device_id: str
         pdf_bytes = await run_in_threadpool(storage.read_file, doc["pdf_path"])
         new_pdf = await run_in_threadpool(pdf_utils.composite_fields_on_pdf, pdf_bytes, resolved)
         pdf_path = await run_in_threadpool(storage.save_file, device_id, f"{ts}_signed.pdf", new_pdf)
-        return storage.update_document(doc["id"], {"pdf_path": pdf_path, "updated_at": now_iso()})
+        return storage.update_document(doc["id"], {"pdf_path": pdf_path, "updated_at": now_iso(), "ocr_text": None, "ocr_unread_pages": [], "ocr_truncated": False})
 
     # scanned document: composite each affected page's fields in one pass, then rebuild the pdf
     page_paths = list(doc.get("page_paths", []))
@@ -505,7 +508,7 @@ async def _apply_resolved_fields(doc: dict, resolved: List[dict], device_id: str
     pdf_bytes = pdf_utils.build_pdf_from_images(all_pages)
     pdf_path = await run_in_threadpool(storage.save_file, device_id, f"{ts}.pdf", pdf_bytes)
 
-    patch = {"page_paths": page_paths, "pdf_path": pdf_path, "updated_at": now_iso()}
+    patch = {"page_paths": page_paths, "pdf_path": pdf_path, "updated_at": now_iso(), "ocr_text": None, "ocr_unread_pages": [], "ocr_truncated": False}
     if new_first_page_bytes is not None:
         thumb = pdf_utils.make_thumbnail(new_first_page_bytes)
         patch["thumbnail_path"] = await run_in_threadpool(storage.save_file, device_id, f"{ts}_thumb.jpg", thumb)
@@ -558,33 +561,22 @@ async def patch_profile(payload: ProfileUpdate, x_device_id: str = Depends(valid
 async def run_ocr(doc_id: str, x_device_id: str = Depends(validated_device_id)):
     await run_in_threadpool(billing.require_pro, x_device_id)
     doc = _require_doc(doc_id, x_device_id)
-    text = ""
-    if doc.get("pdf_path"):
-        try:
-            from pypdf import PdfReader
-            raw = await run_in_threadpool(storage.read_file, doc["pdf_path"])
-            reader = PdfReader(__import__("io").BytesIO(raw))
-            text = "\n".join((page.extract_text() or "") for page in reader.pages).strip()
-        except Exception as exc:
-            logger.warning("PDF text extraction failed: %s", exc)
-    if not text and doc.get("page_paths"):
-        try:
-            import pytesseract
-            from PIL import Image
-            import io
-            chunks = []
-            for path in doc.get("page_paths", []):
-                image = Image.open(io.BytesIO(await run_in_threadpool(storage.read_file, path)))
-                chunks.append(await run_in_threadpool(pytesseract.image_to_string, image))
-            text = "\n".join(chunks).strip()
-        except ImportError:
-            raise HTTPException(status_code=501, detail="OCR is not installed on this server. Install pytesseract and tesseract-ocr, then restart DocuALL.")
-        except Exception as exc:
-            logger.warning("OCR failed: %s", exc)
-    if not text:
-        raise HTTPException(status_code=422, detail="No readable text was found in this document")
-    updated = storage.update_document(doc_id, {"ocr_text": text, "updated_at": now_iso()})
-    return {"text": text, "document": _doc_out(updated)}
+    if not doc.get("pdf_path"):
+        raise HTTPException(422, "This document has no readable PDF.")
+    raw = await run_in_threadpool(storage.read_file, doc["pdf_path"])
+    paths = doc.get("page_paths") or []
+    def read_page(index):
+        return storage.read_file(paths[index]) if index < len(paths) else None
+    try:
+        result = await run_in_threadpool(text_extraction.extract, raw, read_page if paths else None)
+    except Exception:
+        raise HTTPException(422, "This PDF could not be read. Try another document.") from None
+    if not result["text"]:
+        raise HTTPException(422, "No readable text was found. Try a clearer scan; image text extraction also requires the server OCR engine.")
+    updated = storage.update_document(doc_id, {"ocr_text": result["text"],
+        "ocr_unread_pages": result["unread_pages"], "ocr_truncated": result["truncated"],
+        "updated_at": now_iso()})
+    return {**result, "document": _doc_out(updated)}
 
 
 @api_router.post("/documents/{doc_id}/auto-fill-profile")
