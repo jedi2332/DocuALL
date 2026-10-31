@@ -40,7 +40,7 @@ the server address to your computer's LAN IP, e.g. `http://192.168.1.23:8000`
 
 Documents, signatures, and profile details are stored on the DocuALL server in its local data directory. The app does not send document images to an AI service by default. To opt in to AI field extraction, set both `OPENAI_API_KEY` and `DOCUALL_ENABLE_AI_EXTRACTION=true` in the backend environment; the first page of a scanned image is then sent to OpenAI for title/vendor/date/amount suggestions. Keep the flag unset or false to keep that processing off.
 
-The API limits PDF uploads to 25 MB and rejects invalid device IDs before they are used as storage paths.
+The API limits PDF uploads to 25 MB and rejects invalid device IDs before they are used as storage paths. Deleting a document removes its active metadata, referenced local files, and outstanding signing links.
 
 ## Features
 - **Scan**: camera capture with a **flashlight/torch** that's **on by default**
