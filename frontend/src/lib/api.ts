@@ -119,6 +119,9 @@ export const api = {
 
   billingStatus: () => request<import("./billing").BillingStatus>("/billing/status"),
 
+  assembleDocument: (title: string, pages: { document_id: string; page_index: number; rotation: number }[]) =>
+    request<DocumentDTO>("/documents/assemble", { method: "POST", body: JSON.stringify({ title, pages }) }),
+
   listDocuments: () => request<DocumentDTO[]>("/documents"),
   getDocument: (id: string) => request<DocumentDTO>(`/documents/${id}`),
   createDocument: (pages: DocPage[], title?: string) =>

@@ -14,7 +14,7 @@ import os
 import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Literal
 import re
 
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 import pdf_utils
 import storage
 import billing
+import document_tools
 
 ROOT_DIR = Path(__file__).parent
 STATIC_DIR = ROOT_DIR / "static"
@@ -68,6 +69,17 @@ class PageInput(BaseModel):
 class DocumentCreate(BaseModel):
     pages: List[PageInput] = Field(min_length=1, max_length=20)
     title: Optional[str] = Field(default=None, max_length=160)
+
+
+class SelectedPage(BaseModel):
+    document_id: str = Field(min_length=1, max_length=128)
+    page_index: int = Field(ge=0, le=99, strict=True)
+    rotation: Literal[0, 90, 180, 270] = 0
+
+
+class AssembleDocument(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    pages: List[SelectedPage] = Field(min_length=1, max_length=100)
 
 
 class DocumentUpdate(BaseModel):
@@ -326,11 +338,14 @@ async def import_pdf(
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
 
+    try:
+        page_count = await run_in_threadpool(document_tools.validate_import, raw)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     ts = storage.new_id()
     pdf_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}.pdf", raw)
 
-    page_count = pdf_utils.pdf_page_count(raw)
-    rendered = pdf_utils.render_page_as_image(raw, 0)
+    rendered = await run_in_threadpool(pdf_utils.render_page_as_image, raw, 0)
     thumb_bytes = pdf_utils.make_thumbnail(rendered) if rendered else pdf_utils.generic_pdf_thumbnail()
     thumb_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}_thumb.jpg", thumb_bytes)
 
@@ -354,6 +369,56 @@ async def import_pdf(
             "deleted_at": None,
         }
     )
+    return _doc_out(doc)
+
+
+@api_router.post("/documents/assemble", response_model=DocumentOut)
+def assemble_document(payload: AssembleDocument, x_device_id: str = Depends(validated_device_id)):
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(422, "Give your new PDF a name.")
+    ids = list(dict.fromkeys(page.document_id for page in payload.pages))
+    if len(ids) > 10:
+        raise HTTPException(422, "Choose at most 10 source documents.")
+    # Authorize every source before reading any bytes or creating output.
+    docs = [_require_doc(doc_id, x_device_id) for doc_id in ids]
+    sources = {}
+    total = 0
+    for doc in docs:
+        path = doc.get("pdf_path")
+        if not path or Path(path).parts[0] != x_device_id:
+            raise HTTPException(404, "Source PDF not found")
+        full = (storage.FILES_DIR / path).resolve()
+        if storage.FILES_DIR.resolve() not in full.parents or not full.is_file():
+            raise HTTPException(404, "Source PDF not found")
+        total += full.stat().st_size
+        if total > document_tools.MAX_SOURCE_BYTES:
+            raise HTTPException(413, "Selected documents exceed the 50 MB limit.")
+        sources[doc["id"]] = storage.read_file(path)
+    try:
+        result = document_tools.assemble(sources, [page.model_dump() for page in payload.pages])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except Exception:
+        raise HTTPException(422, "These pages could not be combined. Try another PDF.") from None
+    ts = storage.new_id()
+    saved = []
+    try:
+        pdf_path = storage.save_file(x_device_id, f"{ts}.pdf", result)
+        saved.append(pdf_path)
+        thumbnail_path = storage.save_file(x_device_id, f"{ts}_thumb.jpg", pdf_utils.generic_pdf_thumbnail())
+        saved.append(thumbnail_path)
+        doc = storage.create_document({
+            "owner_id": x_device_id, "title": title, "kind": "imported",
+            "vendor": "", "doc_date": "", "amount": "", "category": "Other",
+            "page_paths": [], "pdf_path": pdf_path, "thumbnail_path": thumbnail_path,
+            "page_count": len(payload.pages), "created_at": now_iso(), "updated_at": now_iso(),
+            "deleted_at": None,
+        })
+    except Exception:
+        for path in saved:
+            storage.delete_file(path)
+        raise
     return _doc_out(doc)
 
 

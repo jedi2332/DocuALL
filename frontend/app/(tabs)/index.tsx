@@ -108,6 +108,10 @@ export default function DocumentsHome() {
           <GiantScanButton testID="scan-fab" onPress={() => router.push("/scan")} />
         </View>
 
+        <Pressable accessibilityRole="button" accessibilityLabel="Open PDF page tools" onPress={() => router.push("/tools")} style={{ backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.md }}>
+          <AppText weight="bold">PDF tools</AppText>
+          <AppText size="sm" color={colors.onSurfaceSecondary}>Combine · Reorder · Rotate · Extract pages</AppText>
+        </Pressable>
         <View style={styles.quickActions}>
           <Pressable testID="import-photos-btn" accessibilityRole="button" onPress={importPhotos} disabled={importing} style={({ pressed }) => [styles.actionCard, pressed && styles.pressed, importing && styles.disabled]}>
             <View style={[styles.actionIcon, { backgroundColor: "#20365A" }]}><Ionicons name="images-outline" size={19} color={colors.brandSecondary} /></View>

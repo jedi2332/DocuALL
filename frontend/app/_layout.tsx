@@ -22,6 +22,7 @@ export default function RootLayout() {
           <StatusBar style="dark" />
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="tools" />
             <Stack.Screen name="membership" options={{ presentation: "modal" }} />
             <Stack.Screen name="scan" options={{ presentation: "fullScreenModal" }} />
             <Stack.Screen name="document/[id]" />

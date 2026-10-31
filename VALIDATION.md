@@ -35,3 +35,20 @@ No native Gradle/AAB build, physical-device UI check, live provider call or actu
 store purchase was performed. Account/product provisioning and hosted legal
 pages remain required. See PAYMENTS_AND_PLAY.md for the staged rollout procedure.
 Billing remains disabled by default.
+
+## PDF page tools pass
+
+Added a home-screen PDF tools workflow to combine up to 10 documents / 100 pages,
+extract selected pages, reorder, rotate, remove and undo. Saves a separate PDF;
+source files and signing requests remain unchanged. Text remains selectable.
+Rotated output is normalized so subsequent signing uses consistent coordinates.
+Interactive forms are rejected rather than silently breaking their fields.
+Page tools are not a redaction or metadata-sanitization feature and do not
+preserve digital-signature certification.
+
+31 backend tests and 17 frontend tests pass. The new integration tests cover
+page order/text, rotation, extraction, cross-owner/deleted-source denial,
+invalid selections, source size limits, corrupt/encrypted PDFs, failed-write
+cleanup and private output access. PDF imports now validate before writing.
+TypeScript and Android JavaScript export pass. Physical-device UI testing
+remains outstanding; this is source work, not a deployed release.
