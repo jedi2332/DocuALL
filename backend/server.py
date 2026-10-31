@@ -594,14 +594,13 @@ async def cancel_signing_request(req_id: str, x_device_id: str = Depends(validat
     req = storage.get_signing_request(req_id, x_device_id)
     if not req:
         raise HTTPException(status_code=404, detail="Not found")
+    if req.get("status") == "completed":
+        raise HTTPException(status_code=409, detail="Completed requests cannot be cancelled")
     storage.update_signing_request(req_id, {"status": "cancelled"})
     return {"ok": True}
 
 
-@api_router.get("/public/signing-requests/{token}")
-async def get_public_signing_request(token: str):
-    """No device auth - the token itself is the credential, same as any
-    emailed signing link (DocuSign etc. work the same way)."""
+def _require_active_signing_request(token: str) -> dict:
     req = storage.get_signing_request_by_token(token)
     if not req:
         raise HTTPException(status_code=404, detail="Signing link not found")
@@ -609,6 +608,16 @@ async def get_public_signing_request(token: str):
         if req.get("status") == "pending":
             storage.update_signing_request(req["id"], {"status": "expired"})
         raise HTTPException(status_code=410, detail="This signing link has expired")
+    if req.get("status") != "pending":
+        raise HTTPException(status_code=410, detail="This signing link is no longer active")
+    return req
+
+
+@api_router.get("/public/signing-requests/{token}")
+async def get_public_signing_request(token: str):
+    """No device auth - the token itself is the credential, same as any
+    emailed signing link (DocuSign etc. work the same way)."""
+    req = _require_active_signing_request(token)
     doc = storage.get_document(req["doc_id"], req["owner_id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -622,13 +631,7 @@ async def get_public_signing_request(token: str):
 
 @api_router.get("/public/signing-requests/{token}/page/{page_index}")
 async def get_public_signing_request_page(token: str, page_index: int):
-    req = storage.get_signing_request_by_token(token)
-    if not req:
-        raise HTTPException(status_code=404, detail="Signing link not found")
-    if req.get("expires_at") and datetime.fromisoformat(req["expires_at"]) <= datetime.now(timezone.utc):
-        if req.get("status") == "pending":
-            storage.update_signing_request(req["id"], {"status": "expired"})
-        raise HTTPException(status_code=410, detail="This signing link has expired")
+    req = _require_active_signing_request(token)
     doc = storage.get_document(req["doc_id"], req["owner_id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -649,15 +652,7 @@ async def get_public_signing_request_page(token: str, page_index: int):
 
 @api_router.post("/public/signing-requests/{token}/complete")
 async def complete_signing_request(token: str, payload: CompleteSigningRequest):
-    req = storage.get_signing_request_by_token(token)
-    if not req:
-        raise HTTPException(status_code=404, detail="Signing link not found")
-    if req.get("expires_at") and datetime.fromisoformat(req["expires_at"]) <= datetime.now(timezone.utc):
-        if req.get("status") == "pending":
-            storage.update_signing_request(req["id"], {"status": "expired"})
-        raise HTTPException(status_code=410, detail="This signing link has expired")
-    if req["status"] != "pending":
-        raise HTTPException(status_code=400, detail="This document has already been signed")
+    req = _require_active_signing_request(token)
 
     doc = storage.get_document(req["doc_id"], req["owner_id"])
     if not doc:
@@ -750,12 +745,23 @@ async def serve_file(file_path: str, device: str = Query(...)):
     parts = Path(file_path).parts
     if not DEVICE_ID_RE.fullmatch(device) or len(parts) != 2 or parts[0] != device or any(part in {".", ".."} for part in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
+    if not storage.is_active_file(file_path, device):
+        raise HTTPException(status_code=404, detail="File not found")
     try:
         content = await run_in_threadpool(storage.read_file, file_path)
     except (FileNotFoundError, OSError):
         raise HTTPException(status_code=404, detail="File not found")
     ctype = "application/pdf" if file_path.endswith(".pdf") else "image/jpeg" if file_path.endswith(".jpg") else "image/png"
     return Response(content=content, media_type=ctype)
+
+
+@app.middleware("http")
+async def private_response_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 app.include_router(api_router)
@@ -767,3 +773,4 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+

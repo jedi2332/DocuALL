@@ -77,7 +77,7 @@ export interface SigningRequestDTO {
   id: string;
   doc_id: string;
   signer_name: string;
-  status: "pending" | "completed" | "cancelled";
+  status: "pending" | "completed" | "cancelled" | "expired";
   created_at: string;
   completed_at?: string;
   expires_at?: string;
@@ -170,3 +170,4 @@ export const api = {
     return { uri: `${base}/api/documents/${docId}/page/${pageIndex}`, headers: { "X-Device-Id": deviceId } };
   },
 };
+

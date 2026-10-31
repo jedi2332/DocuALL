@@ -43,8 +43,8 @@ def _load() -> Dict[str, Any]:
         data.setdefault("signing_requests", {})
         data.setdefault("profiles", {})
         return data
-    except (json.JSONDecodeError, OSError):
-        return _empty_db()
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError("Cannot read document database; refusing to overwrite it") from exc
 
 
 def _save(data: Dict[str, Any]) -> None:
@@ -288,3 +288,19 @@ def update_profile(owner_id: str, patch: dict) -> dict:
         data["profiles"][owner_id] = current
         _save(data)
         return current
+
+
+
+def is_active_file(rel_path: str, owner_id: str) -> bool:
+    """Only serve files referenced by an active record belonging to this owner."""
+    data = _load()
+    for doc in data["documents"].values():
+        if doc.get("owner_id") == owner_id and not doc.get("deleted_at"):
+            paths = [*doc.get("page_paths", []), doc.get("pdf_path"), doc.get("thumbnail_path")]
+            if rel_path in paths:
+                return True
+    return any(
+        sig.get("owner_id") == owner_id and not sig.get("deleted_at")
+        and sig.get("image_path") == rel_path
+        for sig in data["signatures"].values()
+    )

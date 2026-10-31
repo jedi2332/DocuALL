@@ -386,21 +386,23 @@ function DraggableField({
   onEditText: () => void;
 }) {
   const start = useRef({ x: field.x, y: field.y });
+  const latest = useRef({ field, onSelect, onMove });
+  latest.current = { field, onSelect, onMove };
   const isImage = field.type === "signature" || field.type === "initials";
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
-        onSelect();
-        start.current = { x: field.x, y: field.y };
+        latest.current.onSelect();
+        start.current = { x: latest.current.field.x, y: latest.current.field.y };
       },
       onPanResponderMove: (_evt, gesture) => {
         const { width, height } = containerSize.current;
         if (!width || !height) return;
         const nextX = clamp(start.current.x + gesture.dx / width, 0, 0.96);
         const nextY = clamp(start.current.y + gesture.dy / height, 0, 0.96);
-        onMove(nextX, nextY);
+        latest.current.onMove(nextX, nextY);
       },
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -521,3 +523,4 @@ const styles = StyleSheet.create({
     color: colors.onSurface,
   },
 });
+
