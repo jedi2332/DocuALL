@@ -91,10 +91,13 @@ def read_file(rel_path: str) -> bytes:
 
 
 def delete_file(rel_path: str) -> None:
-    full = FILES_DIR / rel_path
+    """Best-effort removal of a file, constrained to the local files root."""
+    root = FILES_DIR.resolve()
+    full = (FILES_DIR / rel_path).resolve()
     try:
-        full.unlink()
-    except OSError:
+        full.relative_to(root)
+        full.unlink(missing_ok=True)
+    except (OSError, ValueError):
         pass
 
 
@@ -142,11 +145,31 @@ def list_documents(owner_id: str) -> List[Dict[str, Any]]:
     return docs
 
 
-def soft_delete_document(doc_id: str, owner_id: str, deleted_at: str) -> bool:
-    doc = get_document(doc_id, owner_id)
-    if not doc:
-        return False
-    update_document(doc_id, {"deleted_at": deleted_at})
+def hard_delete_document(doc_id: str, owner_id: str) -> bool:
+    """Remove a document, its referenced files, and its signing links."""
+    with _lock:
+        data = _load()
+        doc = data["documents"].get(doc_id)
+        if not doc or doc.get("owner_id") != owner_id:
+            return False
+
+        file_paths = list(doc.get("page_paths", []))
+        file_paths.extend([doc.get("pdf_path"), doc.get("thumbnail_path")])
+        data["documents"].pop(doc_id, None)
+        data["signing_requests"] = {
+            req_id: req
+            for req_id, req in data["signing_requests"].items()
+            if not (req.get("doc_id") == doc_id and req.get("owner_id") == owner_id)
+        }
+        _save(data)
+
+    # Delete files after the metadata change so old public links stop working immediately.
+    for rel_path in file_paths:
+        if not rel_path:
+            continue
+        parts = Path(rel_path).parts
+        if len(parts) == 2 and parts[0] == owner_id:
+            delete_file(rel_path)
     return True
 
 
