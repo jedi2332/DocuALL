@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Sign document · DocuALL</title>
+<style>
+  :root {
+    --brand: #1A1815;
+    --gold: #D4AF37;
+    --bg: #F4F1EC;
+    --surface: #FFFFFF;
+    --border: #E7E1D4;
+    --text: #1A1815;
+    --text-dim: #8A8378;
+    --error: #C24A3B;
+    --success: #3B7A57;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+  #progress {
+    font-size: 12px;
+    font-weight: 700;
+    background: var(--brand);
+    color: #fff;
+    border-radius: 999px;
+    padding: 5px 10px;
+    white-space: nowrap;
+  }
+  main { padding: 16px; max-width: 720px; margin: 0 auto; padding-bottom: 100px; }
+  .page-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .page-nav button {
+    border: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .page-nav button:disabled { opacity: 0.35; }
+  #pageWrap {
+    position: relative;
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  #pageImg { display: block; width: 100%; }
+  .field {
+    position: absolute;
+    border: 2px dashed var(--gold);
+    border-radius: 4px;
+    background: rgba(212,175,55,0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--brand);
+    text-align: center;
+    padding: 2px;
+    overflow: hidden;
+  }
+  .field.filled {
+    border-style: solid;
+    border-color: var(--success);
+    background: rgba(59,122,87,0.10);
+  }
+  .field img { max-width: 100%; max-height: 100%; }
+  .hint { text-align: center; font-size: 13px; color: var(--text-dim); margin: 14px 0; }
+  footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  button.primary {
+    width: 100%;
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 14px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button.primary:disabled { opacity: 0.4; }
+  .modal-scrim {
+    position: fixed;
+    inset: 0;
+    background: rgba(20,18,15,0.55);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 20;
+  }
+  .modal-card {
+    background: var(--surface);
+    width: 100%;
+    max-width: 480px;
+    border-radius: 20px 20px 0 0;
+    padding: 20px;
+  }
+  .modal-card h2 { margin: 0 0 12px; font-size: 18px; }
+  .tabs { display: flex; background: var(--bg); border-radius: 10px; padding: 4px; margin-bottom: 14px; }
+  .tabs button {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 8px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tabs button.active { background: var(--brand); color: #fff; }
+  canvas#padCanvas {
+    width: 100%;
+    height: 160px;
+    background: var(--bg);
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    touch-action: none;
+  }
+  input[type=text] {
+    width: 100%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font-size: 16px;
+    font-style: italic;
+  }
+  .row { display: flex; gap: 10px; margin-top: 14px; }
+  .row button.secondary {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .row button.primary { flex: 2; margin: 0; }
+  #centerState { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+  #successState { text-align: center; padding: 60px 20px; display: none; }
+  #successState .check {
+    width: 64px; height: 64px; border-radius: 32px; background: var(--success);
+    color: #fff; font-size: 32px; display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1 id="docTitle">Loading…</h1>
+    <div class="sub" id="requestedBy"></div>
+  </div>
+  <div id="progress" style="display:none"></div>
+</header>
+
+<main>
+  <div id="centerState">Loading document…</div>
+
+  <div id="signingUi" style="display:none">
+    <div class="page-nav" id="pageNav" style="display:none">
+      <button id="prevPageBtn">‹</button>
+      <span id="pageLabel"></span>
+      <button id="nextPageBtn">›</button>
+    </div>
+    <div id="pageWrap">
+      <img id="pageImg" />
+    </div>
+    <div class="hint">Tap a highlighted box to fill it in. Once every field is done, you can finish signing.</div>
+  </div>
+
+  <div id="successState">
+    <div class="check">✓</div>
+    <h2>All done!</h2>
+    <p>Thanks — the signed document has been sent back automatically. You can close this page.</p>
+  </div>
+</main>
+
+<footer id="footerBar" style="display:none">
+  <button class="primary" id="finishBtn" disabled>Finish signing</button>
+</footer>
+
+<div class="modal-scrim" id="modalScrim" style="display:none">
+  <div class="modal-card">
+    <h2 id="modalTitle">Sign</h2>
+
+    <div id="sigTabs" class="tabs">
+      <button id="tabDraw" class="active">Draw</button>
+      <button id="tabType">Type</button>
+    </div>
+    <canvas id="padCanvas" width="600" height="240"></canvas>
+    <input id="typeInput" type="text" placeholder="Type your name" style="display:none" />
+
+    <div id="textOnly" style="display:none">
+      <input id="plainInput" type="text" placeholder="Type here" style="font-style:normal" />
+    </div>
+
+    <div class="row">
+      <button class="secondary" id="clearBtn">Clear</button>
+      <button class="primary" id="saveFieldBtn" style="border-radius:10px;">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var token = window.location.pathname.split('/').filter(Boolean).pop();
+  var apiBase = window.location.origin + '/api/public/signing-requests/' + token;
+
+  var state = { doc: null, fields: [], pageIndex: 0, filled: {}, activeField: null, mode: 'draw' };
+
+  var el = function (id) { return document.getElementById(id); };
+
+  function fieldLabel(f) {
+    if (f.type === 'signature') return f.label || 'Sign here';
+    if (f.type === 'initials') return f.label || 'Initial';
+    if (f.type === 'date') return f.label || 'Date';
+    return f.label || 'Fill in';
+  }
+
+  function updateProgress() {
+    var total = state.fields.length;
+    var done = Object.keys(state.filled).length;
+    el('progress').style.display = 'inline-block';
+    el('progress').textContent = done + ' / ' + total + ' fields';
+    el('finishBtn').disabled = done < total;
+  }
+
+  function renderPage() {
+    var pageFields = state.fields.filter(function (f) { return f.page_index === state.pageIndex; });
+    el('pageImg').src = apiBase + '/page/' + state.pageIndex;
+
+    var renderFields = function () {
+      Array.prototype.forEach.call(document.querySelectorAll('.field'), function (n) { n.remove(); });
+      var wrap = el('pageWrap');
+      var w = wrap.clientWidth;
+      var h = w * (el('pageImg').naturalHeight / el('pageImg').naturalWidth || 1.3);
+      wrap.style.height = h + 'px';
+      pageFields.forEach(function (f) {
+        var box = document.createElement('div');
+        box.className = 'field' + (state.filled[f.id] ? ' filled' : '');
+        var isImageField = f.type === 'signature' || f.type === 'initials';
+        box.style.left = (f.x * 100) + '%';
+        box.style.top = (f.y * 100) + '%';
+        box.style.width = (f.w * 100) + '%';
+        box.style.height = isImageField ? (f.w * 100 / 2.5) + '%' : (f.w * 160) + '%';
+        if (state.filled[f.id] && isImageField) {
+          var img = document.createElement('img');
+          img.src = state.filled[f.id].previewUrl;
+          box.appendChild(img);
+        } else {
+          box.textContent = state.filled[f.id] ? (state.filled[f.id].text || '✓') : fieldLabel(f);
+        }
+        box.onclick = function () { openModal(f); };
+        wrap.appendChild(box);
+      });
+    };
+
+    if (el('pageImg').complete) renderFields();
+    el('pageImg').onload = renderFields;
+
+    var count = 0;
+    state.fields.forEach(function (f) { if (f.page_index === state.pageIndex) count++; });
+    var totalPages = state.doc.page_count;
+    el('pageNav').style.display = totalPages > 1 ? 'flex' : 'none';
+    el('pageLabel').textContent = 'Page ' + (state.pageIndex + 1) + ' of ' + totalPages;
+    el('prevPageBtn').disabled = state.pageIndex === 0;
+    el('nextPageBtn').disabled = state.pageIndex === totalPages - 1;
+  }
+
+  // ---- Signature pad (canvas) ----
+  var ctx, drawing = false, strokes = [], currentStroke = [];
+
+  function resetCanvas() {
+    var canvas = el('padCanvas');
+    var rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * 2;
+    canvas.height = rect.height * 2;
+    ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#1A1815';
+    strokes = [];
+  }
+
+  function pointFromEvent(e) {
+    var canvas = el('padCanvas');
+    var rect = canvas.getBoundingClientRect();
+    var clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    var clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return {
+      px: clientX - rect.left,
+      py: clientY - rect.top,
+      x: (clientX - rect.left) / rect.width,
+      y: (clientY - rect.top) / rect.height,
+    };
+  }
+
+  function startDraw(e) {
+    e.preventDefault();
+    drawing = true;
+    var p = pointFromEvent(e);
+    currentStroke = [p];
+    ctx.beginPath();
+    ctx.moveTo(p.px, p.py);
+  }
+  function moveDraw(e) {
+    if (!drawing) return;
+    e.preventDefault();
+    var p = pointFromEvent(e);
+    currentStroke.push(p);
+    ctx.lineTo(p.px, p.py);
+    ctx.stroke();
+  }
+  function endDraw() {
+    if (!drawing) return;
+    drawing = false;
+    if (currentStroke.length) strokes.push(currentStroke);
+  }
+
+  var canvasEl = el('padCanvas');
+  canvasEl.addEventListener('mousedown', startDraw);
+  canvasEl.addEventListener('mousemove', moveDraw);
+  window.addEventListener('mouseup', endDraw);
+  canvasEl.addEventListener('touchstart', startDraw, { passive: false });
+  canvasEl.addEventListener('touchmove', moveDraw, { passive: false });
+  canvasEl.addEventListener('touchend', endDraw);
+
+  // ---- Modal ----
+  function openModal(field) {
+    state.activeField = field;
+    var isImageField = field.type === 'signature' || field.type === 'initials';
+    el('modalTitle').textContent = isImageField ? ('Add your ' + field.type) : (field.type === 'date' ? 'Enter date' : 'Enter text');
+    el('sigTabs').style.display = isImageField ? 'flex' : 'none';
+    el('padCanvas').style.display = isImageField && state.mode === 'draw' ? 'block' : 'none';
+    el('typeInput').style.display = isImageField && state.mode === 'type' ? 'block' : 'none';
+    el('textOnly').style.display = isImageField ? 'none' : 'block';
+    if (field.type === 'date' && !state.filled[field.id]) {
+      el('plainInput').value = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    } else if (!isImageField) {
+      el('plainInput').value = state.filled[field.id] ? state.filled[field.id].text : '';
+    }
+    el('typeInput').value = '';
+    state.mode = 'draw';
+    setActiveTab('draw');
+    el('modalScrim').style.display = 'flex';
+    if (isImageField) setTimeout(resetCanvas, 30);
+  }
+  function closeModal() { el('modalScrim').style.display = 'none'; state.activeField = null; }
+  el('modalScrim').addEventListener('click', function (e) { if (e.target === el('modalScrim')) closeModal(); });
+
+  function setActiveTab(mode) {
+    state.mode = mode;
+    el('tabDraw').className = mode === 'draw' ? 'active' : '';
+    el('tabType').className = mode === 'type' ? 'active' : '';
+    el('padCanvas').style.display = mode === 'draw' ? 'block' : 'none';
+    el('typeInput').style.display = mode === 'type' ? 'block' : 'none';
+    if (mode === 'draw') setTimeout(resetCanvas, 10);
+  }
+  el('tabDraw').onclick = function () { setActiveTab('draw'); };
+  el('tabType').onclick = function () { setActiveTab('type'); };
+  el('clearBtn').onclick = function () {
+    if (state.mode === 'draw') resetCanvas();
+    else { el('typeInput').value = ''; el('plainInput').value = ''; }
+  };
+
+  el('saveFieldBtn').onclick = function () {
+    var f = state.activeField;
+    if (!f) return;
+    var isImageField = f.type === 'signature' || f.type === 'initials';
+    if (isImageField) {
+      if (state.mode === 'draw') {
+        if (!strokes.length) { alert('Draw your ' + f.type + ' first'); return; }
+        state.filled[f.id] = { kind: 'draw', strokes: strokes.map(function (s) { return s.map(function (p) { return { x: p.x, y: p.y }; }); }), previewUrl: el('padCanvas').toDataURL() };
+      } else {
+        if (!el('typeInput').value.trim()) { alert('Type your name first'); return; }
+        state.filled[f.id] = { kind: 'type', text: el('typeInput').value.trim() };
+      }
+    } else {
+      if (!el('plainInput').value.trim()) { alert('Fill this in first'); return; }
+      state.filled[f.id] = { kind: 'text', text: el('plainInput').value.trim() };
+    }
+    closeModal();
+    updateProgress();
+    renderPage();
+  };
+
+  el('prevPageBtn').onclick = function () { if (state.pageIndex > 0) { state.pageIndex--; renderPage(); } };
+  el('nextPageBtn').onclick = function () { if (state.pageIndex < state.doc.page_count - 1) { state.pageIndex++; renderPage(); } };
+
+  el('finishBtn').onclick = function () {
+    el('finishBtn').disabled = true;
+    el('finishBtn').textContent = 'Sending…';
+    var payload = { fields: state.fields.map(function (f) {
+      var v = state.filled[f.id];
+      return { id: f.id, kind: v.kind, strokes: v.strokes, aspect: 2.5, stroke_width: 6, text: v.text };
+    }) };
+    fetch(apiBase + '/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(function (r) {
+      if (!r.ok) throw new Error('failed');
+      el('signingUi').style.display = 'none';
+      el('footerBar').style.display = 'none';
+      el('successState').style.display = 'block';
+      el('progress').style.display = 'none';
+    }).catch(function () {
+      el('finishBtn').disabled = false;
+      el('finishBtn').textContent = 'Finish signing';
+      alert("Couldn't send your signed document — check your connection and try again.");
+    });
+  };
+
+  // ---- Load ----
+  fetch(apiBase).then(function (r) {
+    if (!r.ok) throw new Error('not found');
+    return r.json();
+  }).then(function (data) {
+    if (data.status === 'completed') {
+      el('centerState').style.display = 'none';
+      el('successState').style.display = 'block';
+      el('successState').querySelector('h2').textContent = 'Already signed';
+      el('successState').querySelector('p').textContent = 'This document was already signed. You can close this page.';
+      return;
+    }
+    state.doc = data.doc;
+    state.fields = data.fields;
+    el('docTitle').textContent = data.doc.title;
+    el('requestedBy').textContent = 'Requested for ' + data.signer_name;
+    el('centerState').style.display = 'none';
+    el('signingUi').style.display = 'block';
+    el('footerBar').style.display = 'block';
+    updateProgress();
+    renderPage();
+  }).catch(function () {
+    el('centerState').textContent = "This signing link couldn't be found. Ask for a new one.";
+  });
+})();
+</script>
+</body>
+</html>
