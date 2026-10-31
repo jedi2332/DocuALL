@@ -370,7 +370,7 @@ async def rename_document(doc_id: str, payload: DocumentUpdate, x_device_id: str
 
 @api_router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: str, x_device_id: str = Depends(validated_device_id)):
-    if not storage.soft_delete_document(doc_id, x_device_id, now_iso()):
+    if not storage.hard_delete_document(doc_id, x_device_id):
         raise HTTPException(status_code=404, detail="Document not found")
     return {"ok": True}
 
