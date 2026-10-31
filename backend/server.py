@@ -26,6 +26,7 @@ from starlette.concurrency import run_in_threadpool
 
 import pdf_utils
 import storage
+import billing
 
 ROOT_DIR = Path(__file__).parent
 STATIC_DIR = ROOT_DIR / "static"
@@ -255,6 +256,11 @@ async def extract_fields(page_b64: str) -> dict:
 # ---------------------------------------------------------------------------
 # Routes: documents
 # ---------------------------------------------------------------------------
+@api_router.get("/billing/status")
+async def billing_status(x_device_id: str = Depends(validated_device_id)):
+    return await run_in_threadpool(billing.get_status, x_device_id)
+
+
 @api_router.get("/")
 async def root():
     return {"message": "DocuALL backend", "ok": True, "ai_extraction": bool(OPENAI_API_KEY and AI_EXTRACTION_ENABLED)}
@@ -485,6 +491,7 @@ async def patch_profile(payload: ProfileUpdate, x_device_id: str = Depends(valid
 
 @api_router.post("/documents/{doc_id}/ocr")
 async def run_ocr(doc_id: str, x_device_id: str = Depends(validated_device_id)):
+    await run_in_threadpool(billing.require_pro, x_device_id)
     doc = _require_doc(doc_id, x_device_id)
     text = ""
     if doc.get("pdf_path"):
@@ -559,6 +566,7 @@ def _signing_request_out(req: dict, base_url: str) -> SigningRequestOut:
 
 @api_router.post("/documents/{doc_id}/signing-requests", response_model=SigningRequestOut)
 async def create_signing_request(doc_id: str, payload: SigningRequestCreate, request: Request, x_device_id: str = Depends(validated_device_id)):
+    await run_in_threadpool(billing.require_pro, x_device_id)
     _require_doc(doc_id, x_device_id)
     if not payload.fields:
         raise HTTPException(status_code=400, detail="No fields provided")

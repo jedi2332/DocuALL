@@ -84,6 +84,10 @@ export interface SigningRequestDTO {
   url: string;
 }
 
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const [base, deviceId] = await Promise.all([getApiUrl(), getDeviceId()]);
   const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
@@ -103,7 +107,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // ignore
     }
-    throw new Error(detail || `Request failed (${res.status})`);
+    throw new ApiError(typeof detail === "string" ? detail : "The request could not be completed.", res.status);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -112,6 +116,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   getApiUrl,
   setApiUrl,
+
+  billingStatus: () => request<import("./billing").BillingStatus>("/billing/status"),
 
   listDocuments: () => request<DocumentDTO[]>("/documents"),
   getDocument: (id: string) => request<DocumentDTO>(`/documents/${id}`),

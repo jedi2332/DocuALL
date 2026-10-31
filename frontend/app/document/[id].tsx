@@ -3,11 +3,11 @@ import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, 
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import { AppText } from "@/src/components/AppText";
-import { api, DocumentDTO, SigningRequestDTO } from "@/src/lib/api";
+import { api, ApiError, DocumentDTO, SigningRequestDTO } from "@/src/lib/api";
 import { useDocs } from "@/src/lib/docs-context";
 import { colors, radius, spacing } from "@/src/theme/theme";
 
@@ -165,7 +165,11 @@ export default function DocumentDetail() {
       const preview = result.text.length > 900 ? `${result.text.slice(0, 900)}...` : result.text;
       Alert.alert("Text found", preview || "No text found.");
     } catch (e: any) {
-      Alert.alert("OCR unavailable", e?.message ?? "Try again after the OCR package is installed on the server.");
+      if (e instanceof ApiError && e.status === 402) {
+        Alert.alert("Text extraction is a Pro feature", "View plans or keep using your documents.", [
+          { text: "Not now", style: "cancel" }, { text: "View plans", onPress: () => router.push("/membership") },
+        ]);
+      } else Alert.alert("OCR unavailable", e?.message ?? "Please try again.");
     } finally {
       setBusy(null);
     }
