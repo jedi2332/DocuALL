@@ -2,8 +2,8 @@
 DocuALL backend.
 
 Runs entirely on local disk - no MongoDB, no third-party proxy required.
-Optional AI field extraction (title/vendor/date/amount guess) kicks in only
-if OPENAI_API_KEY is set; the app is fully usable without it.
+Optional AI field extraction is off by default. It runs only when
+OPENAI_API_KEY is set and DOCUALL_ENABLE_AI_EXTRACTION=true.
 
 Run with:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload
@@ -15,12 +15,13 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
+import re
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, APIRouter, Header, HTTPException, Query, Request, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import pdf_utils
@@ -31,6 +32,9 @@ STATIC_DIR = ROOT_DIR / "static"
 load_dotenv(ROOT_DIR / ".env")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+AI_EXTRACTION_ENABLED = os.environ.get("DOCUALL_ENABLE_AI_EXTRACTION", "false").strip().lower() in {"1", "true", "yes", "on"}
+MAX_PDF_BYTES = 25 * 1024 * 1024
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 APP_NAME = "docuall"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -38,6 +42,13 @@ logger = logging.getLogger("docuall")
 
 app = FastAPI(title="DocuALL API")
 api_router = APIRouter(prefix="/api")
+
+
+def validated_device_id(x_device_id: str = Header(..., alias="X-Device-Id")) -> str:
+    """Reject path-like owner IDs before they reach the storage layer."""
+    if not DEVICE_ID_RE.fullmatch(x_device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    return x_device_id
 
 
 def now_iso() -> str:
@@ -48,18 +59,18 @@ def now_iso() -> str:
 # Models
 # ---------------------------------------------------------------------------
 class PageInput(BaseModel):
-    base64: str
+    base64: str = Field(min_length=1, max_length=16_000_000)
     enhance: bool = True
     grayscale: bool = False
 
 
 class DocumentCreate(BaseModel):
-    pages: List[PageInput]
-    title: Optional[str] = None
+    pages: List[PageInput] = Field(min_length=1, max_length=20)
+    title: Optional[str] = Field(default=None, max_length=160)
 
 
 class DocumentUpdate(BaseModel):
-    title: str
+    title: str = Field(min_length=1, max_length=160)
 
 
 class SignatureCreate(BaseModel):
@@ -191,7 +202,7 @@ def _decode_b64(b64: str) -> bytes:
 # ---------------------------------------------------------------------------
 async def extract_fields(page_b64: str) -> dict:
     default = {"title": "", "vendor": "", "doc_date": "", "amount": "", "category": "Other"}
-    if not OPENAI_API_KEY:
+    if not OPENAI_API_KEY or not AI_EXTRACTION_ENABLED:
         return default
     try:
         import json as _json
@@ -246,11 +257,11 @@ async def extract_fields(page_b64: str) -> dict:
 # ---------------------------------------------------------------------------
 @api_router.get("/")
 async def root():
-    return {"message": "DocuALL backend", "ok": True, "ai_extraction": bool(OPENAI_API_KEY)}
+    return {"message": "DocuALL backend", "ok": True, "ai_extraction": bool(OPENAI_API_KEY and AI_EXTRACTION_ENABLED)}
 
 
 @api_router.post("/documents", response_model=DocumentOut)
-async def create_document(payload: DocumentCreate, x_device_id: str = Header(...)):
+async def create_document(payload: DocumentCreate, x_device_id: str = Depends(validated_device_id)):
     """Creates a document from freshly scanned/imported photo pages."""
     if not payload.pages:
         raise HTTPException(status_code=400, detail="No pages provided")
@@ -300,10 +311,12 @@ async def create_document(payload: DocumentCreate, x_device_id: str = Header(...
 async def import_pdf(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
-    x_device_id: str = Header(...),
+    x_device_id: str = Depends(validated_device_id),
 ):
     """Imports an existing PDF file as-is (used for the "Import PDF" action)."""
-    raw = await file.read()
+    raw = await file.read(MAX_PDF_BYTES + 1)
+    if len(raw) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF is too large. The upload limit is 25 MB.")
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
 
@@ -339,31 +352,31 @@ async def import_pdf(
 
 
 @api_router.get("/documents", response_model=List[DocumentOut])
-async def list_documents(x_device_id: str = Header(...)):
+async def list_documents(x_device_id: str = Depends(validated_device_id)):
     return [_doc_out(d) for d in storage.list_documents(x_device_id)]
 
 
 @api_router.get("/documents/{doc_id}", response_model=DocumentOut)
-async def get_document(doc_id: str, x_device_id: str = Header(...)):
+async def get_document(doc_id: str, x_device_id: str = Depends(validated_device_id)):
     return _doc_out(_require_doc(doc_id, x_device_id))
 
 
 @api_router.patch("/documents/{doc_id}", response_model=DocumentOut)
-async def rename_document(doc_id: str, payload: DocumentUpdate, x_device_id: str = Header(...)):
+async def rename_document(doc_id: str, payload: DocumentUpdate, x_device_id: str = Depends(validated_device_id)):
     _require_doc(doc_id, x_device_id)
     doc = storage.update_document(doc_id, {"title": payload.title.strip(), "updated_at": now_iso()})
     return _doc_out(doc)
 
 
 @api_router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str, x_device_id: str = Header(...)):
+async def delete_document(doc_id: str, x_device_id: str = Depends(validated_device_id)):
     if not storage.soft_delete_document(doc_id, x_device_id, now_iso()):
         raise HTTPException(status_code=404, detail="Document not found")
     return {"ok": True}
 
 
 @api_router.post("/documents/{doc_id}/sign", response_model=DocumentOut)
-async def sign_document(doc_id: str, placement: SignPlacement, x_device_id: str = Header(...)):
+async def sign_document(doc_id: str, placement: SignPlacement, x_device_id: str = Depends(validated_device_id)):
     """Kept for backwards compatibility - places a single signature. Prefer
     /apply-fields, which supports mixing in initials/date/text fields and
     applies everything in one pass."""
@@ -430,7 +443,7 @@ async def _apply_resolved_fields(doc: dict, resolved: List[dict], device_id: str
 
 
 @api_router.post("/documents/{doc_id}/apply-fields", response_model=DocumentOut)
-async def apply_fields(doc_id: str, payload: ApplyFields, x_device_id: str = Header(...)):
+async def apply_fields(doc_id: str, payload: ApplyFields, x_device_id: str = Depends(validated_device_id)):
     """Stamps one or more fields (signature, initials, date, text) onto a
     document in a single pass - this is what powers the "prepare & sign"
     screen, which can drop down any number/mix of fields across pages
@@ -461,17 +474,17 @@ async def apply_fields(doc_id: str, payload: ApplyFields, x_device_id: str = Hea
 # Routes: saved profile and OCR
 # ---------------------------------------------------------------------------
 @api_router.get("/profile")
-async def get_profile(x_device_id: str = Header(...)):
+async def get_profile(x_device_id: str = Depends(validated_device_id)):
     return storage.get_profile(x_device_id)
 
 
 @api_router.patch("/profile")
-async def patch_profile(payload: ProfileUpdate, x_device_id: str = Header(...)):
+async def patch_profile(payload: ProfileUpdate, x_device_id: str = Depends(validated_device_id)):
     return storage.update_profile(x_device_id, payload.model_dump())
 
 
 @api_router.post("/documents/{doc_id}/ocr")
-async def run_ocr(doc_id: str, x_device_id: str = Header(...)):
+async def run_ocr(doc_id: str, x_device_id: str = Depends(validated_device_id)):
     doc = _require_doc(doc_id, x_device_id)
     text = ""
     if doc.get("pdf_path"):
@@ -503,7 +516,7 @@ async def run_ocr(doc_id: str, x_device_id: str = Header(...)):
 
 
 @api_router.post("/documents/{doc_id}/auto-fill-profile")
-async def auto_fill_profile(doc_id: str, payload: ApplyFields, x_device_id: str = Header(...)):
+async def auto_fill_profile(doc_id: str, payload: ApplyFields, x_device_id: str = Depends(validated_device_id)):
     doc = _require_doc(doc_id, x_device_id)
     profile = storage.get_profile(x_device_id)
     values = {
@@ -545,7 +558,7 @@ def _signing_request_out(req: dict, base_url: str) -> SigningRequestOut:
 
 
 @api_router.post("/documents/{doc_id}/signing-requests", response_model=SigningRequestOut)
-async def create_signing_request(doc_id: str, payload: SigningRequestCreate, request: Request, x_device_id: str = Header(...)):
+async def create_signing_request(doc_id: str, payload: SigningRequestCreate, request: Request, x_device_id: str = Depends(validated_device_id)):
     _require_doc(doc_id, x_device_id)
     if not payload.fields:
         raise HTTPException(status_code=400, detail="No fields provided")
@@ -570,14 +583,14 @@ async def create_signing_request(doc_id: str, payload: SigningRequestCreate, req
 
 
 @api_router.get("/documents/{doc_id}/signing-requests", response_model=List[SigningRequestOut])
-async def list_signing_requests(doc_id: str, request: Request, x_device_id: str = Header(...)):
+async def list_signing_requests(doc_id: str, request: Request, x_device_id: str = Depends(validated_device_id)):
     _require_doc(doc_id, x_device_id)
     reqs = storage.list_signing_requests(doc_id, x_device_id)
     return [_signing_request_out(r, str(request.base_url)) for r in reqs]
 
 
 @api_router.delete("/signing-requests/{req_id}")
-async def cancel_signing_request(req_id: str, x_device_id: str = Header(...)):
+async def cancel_signing_request(req_id: str, x_device_id: str = Depends(validated_device_id)):
     req = storage.get_signing_request(req_id, x_device_id)
     if not req:
         raise HTTPException(status_code=404, detail="Not found")
@@ -681,7 +694,7 @@ async def signer_page(token: str):
 
 
 @api_router.get("/documents/{doc_id}/page/{page_index}")
-async def get_document_page_image(doc_id: str, page_index: int, x_device_id: str = Header(...)):
+async def get_document_page_image(doc_id: str, page_index: int, x_device_id: str = Depends(validated_device_id)):
     """Returns a JPEG for one page, used by the sign-placement screen."""
     doc = _require_doc(doc_id, x_device_id)
     if doc.get("kind") == "imported":
@@ -702,7 +715,7 @@ async def get_document_page_image(doc_id: str, page_index: int, x_device_id: str
 # Routes: signatures
 # ---------------------------------------------------------------------------
 @api_router.post("/signatures", response_model=SignatureOut)
-async def create_signature(payload: SignatureCreate, x_device_id: str = Header(...)):
+async def create_signature(payload: SignatureCreate, x_device_id: str = Depends(validated_device_id)):
     if payload.kind == "draw":
         if not payload.strokes:
             raise HTTPException(status_code=400, detail="No strokes")
@@ -718,12 +731,12 @@ async def create_signature(payload: SignatureCreate, x_device_id: str = Header(.
 
 
 @api_router.get("/signatures", response_model=List[SignatureOut])
-async def list_signatures(x_device_id: str = Header(...)):
+async def list_signatures(x_device_id: str = Depends(validated_device_id)):
     return [_sig_out(s) for s in storage.list_signatures(x_device_id)]
 
 
 @api_router.delete("/signatures/{sig_id}")
-async def delete_signature(sig_id: str, x_device_id: str = Header(...)):
+async def delete_signature(sig_id: str, x_device_id: str = Depends(validated_device_id)):
     if not storage.soft_delete_signature(sig_id, x_device_id, now_iso()):
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
@@ -734,7 +747,8 @@ async def delete_signature(sig_id: str, x_device_id: str = Header(...)):
 # ---------------------------------------------------------------------------
 @api_router.get("/files/{file_path:path}")
 async def serve_file(file_path: str, device: str = Query(...)):
-    if not file_path.startswith(f"{device}/"):
+    parts = Path(file_path).parts
+    if not DEVICE_ID_RE.fullmatch(device) or len(parts) != 2 or parts[0] != device or any(part in {".", ".."} for part in parts):
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
         content = await run_in_threadpool(storage.read_file, file_path)

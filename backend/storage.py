@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -62,13 +63,23 @@ def new_id() -> str:
 # File (blob) storage
 # ---------------------------------------------------------------------------
 def save_file(device_id: str, filename: str, data: bytes) -> str:
-    """Writes bytes to disk and returns a relative path used as the file's id."""
-    device_dir = FILES_DIR / device_id
-    device_dir.mkdir(parents=True, exist_ok=True)
-    rel_path = f"{device_id}/{filename}"
-    with open(FILES_DIR / rel_path, "wb") as f:
+    """Writes bytes inside one owner's directory and returns its relative path."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", device_id):
+        raise ValueError("Invalid device ID")
+    if not filename or Path(filename).name != filename or filename in {".", ".."}:
+        raise ValueError("Invalid filename")
+
+    root = FILES_DIR.resolve()
+    target = (FILES_DIR / device_id / filename).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Invalid storage path") from exc
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as f:
         f.write(data)
-    return rel_path
+    return f"{device_id}/{filename}"
 
 
 def read_file(rel_path: str) -> bytes:
