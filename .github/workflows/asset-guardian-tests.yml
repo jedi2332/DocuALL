@@ -1,0 +1,31 @@
+name: Asset Guardian read-only tests
+
+on:
+  pull_request:
+    paths:
+      - 'backend/asset_guardian.py'
+      - 'backend/tests/**'
+      - '.github/workflows/asset-guardian-tests.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/asset_guardian.py'
+      - 'backend/tests/**'
+      - '.github/workflows/asset-guardian-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile asset audit
+        run: python -m py_compile backend/asset_guardian.py
+      - name: Run asset audit behavioral tests
+        run: python -m unittest discover -s backend/tests -p 'test_*.py' -v
