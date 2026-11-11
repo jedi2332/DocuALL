@@ -1,0 +1,55 @@
+DOCUALL - SECONDARY AUDIT GUIDE & SECURITY REVIEW
+App: DocuALL
+Auditor Reference Date: 2026-11-10
+
+PRIMARY AUDIT FOCUS AREAS:
+
+1. AUTHENTICATION & ACCESS CONTROL
+- Public vs Guest vs Account:
+  Visitors get an anonymous guest session automatically (_authenticated/route.tsx).
+  Upgrading to permanent email account preserves all existing guest documents.
+- RLS Policies (supabase/migrations/):
+  Every database query is bound to auth.uid() = user_id.
+  Signing requests use nonces/secure tokens (sign.$token.tsx) with strict expiry.
+- Storage Buckets:
+  "documents" and "signatures" buckets enforce private access controls.
+
+2. PRIVACY & ON-DEVICE PROCESSING GUARANTEES
+- Document Text Extraction:
+  All text parsing (src/lib/pdf-render.ts, src/lib/ocr.ts, src/lib/organize-api.ts) runs
+  locally in the browser/webview.
+  Zero document text, extracted PII, or photo frames are transmitted to third-party AI APIs.
+- OCR Processing:
+  Tesseract.js runs inside an isolated web worker with client-side language models.
+
+3. ANDROID NATIVE INTEGRATION & PERMISSIONS
+- Manifest & Scoped Storage:
+  android/app/src/main/AndroidManifest.xml requests ONLY android.permission.INTERNET.
+  NO READ_EXTERNAL_STORAGE, NO WRITE_EXTERNAL_STORAGE, NO MANAGE_EXTERNAL_STORAGE.
+- Intent Handling (android/.../DocuIntakePlugin.java):
+  Handles ACTION_VIEW and ACTION_SEND for:
+  * application/pdf
+  * image/jpeg
+  * image/png
+  * image/webp
+  Incoming content:// URIs are copied strictly to app-internal cache with a 25MB safety cap.
+- Path Traversal Protection:
+  safeFileName() strips directory traversal and control characters before ingestion.
+
+4. ORGANIZER & PROJECT VAULT INTEGRITY
+- Vault Lock Rule:
+  Files tagged in active Project Vaults (e.g. CapCut reels, commercial assets) are strictly
+  frozen. Organize runs never rename, move, or overwrite locked assets.
+- Export Safety:
+  Organize does not delete or alter on-device files; it packages organized copies into
+  downloadable ZIP archives with complete manifest logs (README.txt and CHANGES.txt).
+
+5. AUTOMATED TEST SUITE
+All tests can be executed via:
+bun run test
+
+Test suites cover:
+- src/test/android-intake.test.ts: intent handling, MIME validation, share sheet
+- src/test/organize.test.ts: pure sorting rules, collision handling, duplicate detection
+- src/test/fuzzy-organize.test.ts: typo tolerance, alias learning, OCR text scoring
+- src/test/app-routing.test.tsx: route navigation, top-left brand home link

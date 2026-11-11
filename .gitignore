@@ -1,8 +1,0 @@
-.env*
-*.pem
-*.key
-node_modules/
-venv/
-__pycache__/
-data/
-storage/
