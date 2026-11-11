@@ -14,6 +14,35 @@ export type Database = {
   }
   public: {
     Tables: {
+      vault_capcut_handoffs: {
+        Row: {
+          files: Json
+          id: string
+          shared_at: string
+          vault_id: string
+        }
+        Insert: {
+          files: Json
+          id: string
+          shared_at: string
+          vault_id: string
+        }
+        Update: {
+          files?: Json
+          id?: string
+          shared_at?: string
+          vault_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vault_capcut_handoffs_vault_id_fkey"
+            columns: ["vault_id"]
+            isOneToOne: false
+            referencedRelation: "vault_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       documents: {
         Row: {
           amount: string
@@ -231,6 +260,7 @@ export type Database = {
           created_at: string
           files: Json
           id: string
+          is_capcut: boolean
           locked: boolean
           name: string
           updated_at: string
@@ -240,6 +270,7 @@ export type Database = {
           created_at?: string
           files?: Json
           id?: string
+          is_capcut?: boolean
           locked?: boolean
           name: string
           updated_at?: string
@@ -249,6 +280,7 @@ export type Database = {
           created_at?: string
           files?: Json
           id?: string
+          is_capcut?: boolean
           locked?: boolean
           name?: string
           updated_at?: string
@@ -261,7 +293,24 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      append_vault_files: {
+        Args: { p_vault_id: string; p_files: Json }
+        Returns: boolean
+      }
+      list_capcut_vault_tags: {
+        Args: { p_vault_id: string }
+        Returns: { file_path: string; file_hash: string }[]
+      }
+      record_capcut_handoff: {
+        Args: {
+          p_id: string
+          p_owner_id: string
+          p_vault_id: string
+          p_shared_at: string
+          p_files: Json
+        }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

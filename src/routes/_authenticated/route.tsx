@@ -1,4 +1,5 @@
 import { createFileRoute, redirect, Outlet } from "@tanstack/react-router";
+import { useCapCutShareRecovery } from "@/hooks/use-capcut-share";
 import { supabase } from "@/integrations/supabase/client";
 
 // Anyone can use the app right away: visitors without an account get a private
@@ -9,7 +10,13 @@ export const Route = createFileRoute("/_authenticated")({
     const { data } = await supabase.auth.getUser();
     if (data.user) return;
     const { error } = await supabase.auth.signInAnonymously();
-    if (error) throw redirect({ to: "/auth", search: { redirect: location.href } });
+    if (error)
+      throw redirect({ to: "/auth", search: { redirect: location.href } });
   },
-  component: () => <Outlet />,
+  component: AuthenticatedLayout,
 });
+
+function AuthenticatedLayout() {
+  useCapCutShareRecovery();
+  return <Outlet />;
+}

@@ -41,6 +41,7 @@ export interface VaultProject {
   id: string;
   name: string;
   locked: boolean;
+  isCapCut?: boolean;
   files: VaultFile[];
 }
 

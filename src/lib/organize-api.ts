@@ -30,30 +30,54 @@ export async function saveOrganizeSettings(folders: OrgFolder[], rules: OrgRule[
 export async function listVaults(): Promise<VaultProject[]> {
   const { data, error } = await supabase.from("vault_projects").select("*").order("created_at");
   if (error) throw error;
-  return (data ?? []).map((v) => ({ id: v.id, name: v.name, locked: v.locked, files: v.files as unknown as VaultFile[] }));
+  return (data ?? []).map((v) => ({
+    id: v.id,
+    name: v.name,
+    locked: v.locked,
+    isCapCut: v.is_capcut,
+    files: v.files as unknown as VaultFile[],
+  }));
 }
 
-export async function createVault(name: string, files: VaultFile[]) {
+export async function createVault(name: string, files: VaultFile[], isCapCut = false) {
   const user_id = await uid();
-  const { error } = await supabase.from("vault_projects").insert({ user_id, name, files: files as unknown as Json });
+  const { error } = await supabase.from("vault_projects").insert({
+    user_id,
+    name,
+    is_capcut: isCapCut,
+    files: files as unknown as Json,
+  });
   if (error) throw error;
 }
 
-export async function updateVault(id: string, patch: { locked?: boolean; files?: VaultFile[] }) {
-  const { error } = await supabase
+export async function appendVaultFiles(id: string, files: VaultFile[]) {
+  const { data, error } = await supabase.rpc("append_vault_files", {
+    p_vault_id: id,
+    p_files: files as unknown as Json,
+  });
+  if (error) throw error;
+  if (!data) throw new Error("This Vault is no longer available.");
+}
+
+export async function updateVault(id: string, patch: { locked?: boolean; isCapCut?: boolean }) {
+  const { data, error } = await supabase
     .from("vault_projects")
     .update({
       ...(patch.locked !== undefined ? { locked: patch.locked } : {}),
-      ...(patch.files ? { files: patch.files as unknown as Json } : {}),
+      ...(patch.isCapCut !== undefined ? { is_capcut: patch.isCapCut } : {}),
       updated_at: new Date().toISOString(),
     })
-    .eq("id", id);
+    .eq("id", id)
+    .select("id")
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("This Vault is no longer available.");
 }
 
 export async function deleteVault(id: string) {
-  const { error } = await supabase.from("vault_projects").delete().eq("id", id);
+  const { data, error } = await supabase.from("vault_projects").delete().eq("id", id).select("id").maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error("This Vault is unavailable or locked.");
 }
 
 export async function logRun(changes: { file: string; to: string }[]) {

@@ -15,6 +15,13 @@
       "when": 1794314662269,
       "tag": "0001_organize_hub",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794412800000,
+      "tag": "0002_capcut_handoff",
+      "breakpoints": true
     }
   ]
 }

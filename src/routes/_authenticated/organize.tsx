@@ -6,14 +6,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Lock, LockOpen, Undo2, Download, FolderPlus, Trash2, X } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { CapCutVaultMedia } from "@/components/CapCutVaultShare";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { sortFiles, suggestPattern, relatedGroups, addAlias, editAlias, removeAlias, UNSORTED, type OrgFile, type OrgFolder, type Suggestion, type AliasCandidate } from "@/lib/organize";
 import { clueProblem } from "@/lib/fuzzy-match";
 import {
-  getOrganizeSettings, saveOrganizeSettings, listVaults, createVault, updateVault, deleteVault,
+  getOrganizeSettings, saveOrganizeSettings, listVaults, createVault, appendVaultFiles, updateVault, deleteVault,
   readFiles, buildZip, logRun, listRuns, preparedZips,
 } from "@/lib/organize-api";
 import { downloadBytes } from "@/lib/image-utils";
@@ -333,6 +335,7 @@ function VaultsTab() {
   const qc = useQueryClient();
   const { data: vaults = [] } = useQuery({ queryKey: ["vaults"], queryFn: listVaults });
   const [name, setName] = useState("");
+  const [newCapCutVault, setNewCapCutVault] = useState(false);
   const [busy, setBusy] = useState(false);
   const pickRef = useRef<HTMLInputElement>(null);
   const vaultFolderRef = useRef<HTMLInputElement>(null);
@@ -340,26 +343,42 @@ function VaultsTab() {
   const canPickFolder = useFolderPicking();
   const refresh = () => qc.invalidateQueries({ queryKey: ["vaults"] });
 
-  const onFiles = async (list: FileList | null) => {
-    if (!list?.length) return;
+  const runVaultAction = async (action: () => Promise<void>) => {
     setBusy(true);
     try {
+      await action();
+      await refresh();
+    } catch (err) {
+      const message = err && typeof err === "object" && "message" in err ? String(err.message) : "Could not save Vault.";
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onFiles = (list: FileList | null) => {
+    if (!list?.length) return;
+    const vaultId = addTo.current;
+    void runVaultAction(async () => {
       const read = await readFiles([...list]);
       const files = read.map(({ meta }) => ({ path: meta.path, name: meta.name, size: meta.size, hash: meta.hash }));
-      if (addTo.current) {
-        const v = vaults.find((x) => x.id === addTo.current)!;
-        await updateVault(v.id, { files: [...v.files, ...files] });
+      if (vaultId) {
+        await appendVaultFiles(vaultId, files);
       } else {
         await createVault(name.trim(), files);
         setName("");
       }
-      refresh();
       toast.success(`${files.length} files protected`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not save vault");
-    } finally {
-      setBusy(false);
-    }
+    });
+  };
+
+  const createCapCutVault = () => {
+    void runVaultAction(async () => {
+      await createVault(name.trim(), [], true);
+      setName("");
+      setNewCapCutVault(false);
+      toast.success("CapCut Vault created.");
+    });
   };
 
   return (
@@ -369,21 +388,38 @@ function VaultsTab() {
         <p className="mt-1 text-sm text-muted-foreground">
           Add the files a video project uses (like a CapCut reel). Locked files are never re-sorted or flagged, and exports keep their exact names and folder paths.
         </p>
-        <div className="mt-3 flex gap-2">
-          <Input placeholder="Project name, e.g. Caleb Commercials & Ads" value={name} onChange={(e) => setName(e.target.value)} className="h-12" />
-          <Button
-            className="h-12" disabled={!name.trim() || busy}
-            onClick={() => { addTo.current = null; pickRef.current?.click(); }}
-          >
-            <FolderPlus className="mr-1 h-4 w-4" />Files
-          </Button>
-          {canPickFolder && (
-            <Button
-              className="h-12" variant="secondary" disabled={!name.trim() || busy}
-              onClick={() => { addTo.current = null; vaultFolderRef.current?.click(); }}
-            >
-              Folder
+        <label className="mt-2 flex min-h-11 items-center gap-2 text-sm">
+          <Switch
+            aria-label="This is a CapCut Vault"
+            checked={newCapCutVault}
+            onCheckedChange={setNewCapCutVault}
+            disabled={busy}
+          />
+          This is a CapCut Vault
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <Input placeholder="Project name, e.g. Caleb Commercials & Ads" aria-label="Vault name" value={name} onChange={(e) => setName(e.target.value)} className="h-12 min-w-40 flex-1" />
+          {newCapCutVault ? (
+            <Button className="h-12" disabled={!name.trim() || busy} onClick={createCapCutVault}>
+              Create CapCut Vault
             </Button>
+          ) : (
+            <>
+              <Button
+                className="h-12" disabled={!name.trim() || busy}
+                onClick={() => { addTo.current = null; pickRef.current?.click(); }}
+              >
+                <FolderPlus className="mr-1 h-4 w-4" />Files
+              </Button>
+              {canPickFolder && (
+                <Button
+                  className="h-12" variant="secondary" disabled={!name.trim() || busy}
+                  onClick={() => { addTo.current = null; vaultFolderRef.current?.click(); }}
+                >
+                  Folder
+                </Button>
+              )}
+            </>
           )}
         </div>
         <input
@@ -399,23 +435,36 @@ function VaultsTab() {
       <GuestNote what="vaults" />
       {vaults.map((v) => (
         <div key={v.id} className="space-y-3 rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-2">
-            <p className="flex-1 font-medium text-foreground">{v.name}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="min-w-0 flex-1 break-words font-medium text-foreground">{v.name}</p>
+            {v.isCapCut && <Badge className="border-white/20 bg-black text-white">CAPCUT VAULT</Badge>}
             <Badge variant={v.locked ? "default" : "secondary"}>{v.locked ? "Locked" : "Unlocked"}</Badge>
           </div>
           <p className="text-sm text-muted-foreground">{v.files.length} protected files</p>
-          <div className="grid grid-cols-3 gap-2">
-            <Button variant="secondary" className="h-11" onClick={() => { addTo.current = v.id; pickRef.current?.click(); }}>Add files</Button>
-            <Button variant="secondary" className="h-11" onClick={async () => { await updateVault(v.id, { locked: !v.locked }); refresh(); }}>
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <Switch
+              checked={v.isCapCut ?? false}
+              disabled={busy}
+              onCheckedChange={(isCapCut) => void runVaultAction(() => updateVault(v.id, { isCapCut }))}
+              aria-label={`Use ${v.name} as a CapCut Vault`}
+            />
+            CapCut Vault
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" className="h-11" disabled={busy} onClick={() => { addTo.current = v.id; pickRef.current?.click(); }}>Add files</Button>
+            <Button variant="secondary" className="h-11" disabled={busy} onClick={() => void runVaultAction(() => updateVault(v.id, { locked: !v.locked }))}>
               {v.locked ? <><LockOpen className="mr-1 h-4 w-4" />Unlock</> : <><Lock className="mr-1 h-4 w-4" />Lock</>}
             </Button>
             <Button
               variant="ghost" className="h-11"
-              onClick={async () => { if (confirm(`Remove vault “${v.name}”? Your files are not affected.`)) { await deleteVault(v.id); refresh(); } }}
+              disabled={busy || v.locked}
+              onClick={() => { if (confirm(`Remove vault “${v.name}”? Your files are not affected.`)) void runVaultAction(() => deleteVault(v.id)); }}
             >
-              <Trash2 className="h-4 w-4" />
+              <Trash2 className="mr-1 h-4 w-4" />
+              {v.locked ? "Unlock to remove" : "Remove"}
             </Button>
           </div>
+          {v.isCapCut && <CapCutVaultMedia vault={v} />}
         </div>
       ))}
     </div>
