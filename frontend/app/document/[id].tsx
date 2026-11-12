@@ -1,13 +1,13 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image } from "expo-image";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import { AppText } from "@/src/components/AppText";
-import { api, DocumentDTO, SigningRequestDTO } from "@/src/lib/api";
+import { api, ApiError, DocumentDTO, SigningRequestDTO } from "@/src/lib/api";
 import { useDocs } from "@/src/lib/docs-context";
 import { colors, radius, spacing } from "@/src/theme/theme";
 
@@ -20,7 +20,10 @@ export default function DocumentDetail() {
   const [doc, setDoc] = useState<DocumentDTO | null>(null);
   const [pageSources, setPageSources] = useState<{ uri: string; headers: Record<string, string> }[]>([]);
   const [signingRequests, setSigningRequests] = useState<SigningRequestDTO[]>([]);
+  const [revoking, setRevoking] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const savingTitle = useRef(false);
   const [renaming, setRenaming] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [busy, setBusy] = useState<"share" | "export" | "email" | "ocr" | "delete" | null>(null);
@@ -28,6 +31,7 @@ export default function DocumentDetail() {
   const load = useCallback(async () => {
     if (!id) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const d = await api.getDocument(id);
       setDoc(d);
@@ -35,9 +39,9 @@ export default function DocumentDetail() {
       const sources = await Promise.all(
         Array.from({ length: d.page_count || 1 }, (_, i) => api.pageImageSource(d.id, i))
       );
-      setPageSources(sources);
+      setPageSources(sources.map(source => ({ ...source, uri: `${source.uri}${source.uri.includes("?") ? "&" : "?"}v=${encodeURIComponent(d.updated_at)}` })));
     } catch (e: any) {
-      Alert.alert("Couldn't load document", e?.message ?? "Something went wrong");
+      setLoadError(e?.message ?? "Couldn't load document. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -52,32 +56,58 @@ export default function DocumentDetail() {
     }
   }, [id]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
-
   useFocusEffect(
     useCallback(() => {
-      loadSigningRequests();
-    }, [loadSigningRequests])
+      void load();
+      void loadSigningRequests();
+    }, [load, loadSigningRequests])
   );
 
+  const revokeRequest = (request: SigningRequestDTO) => {
+    Alert.alert("Revoke signing link?", `${request.signer_name} will no longer be able to open this link.`, [
+      { text: "Keep link", style: "cancel" },
+      { text: "Revoke", style: "destructive", onPress: async () => {
+        setRevoking(request.id);
+        try {
+          await api.cancelSigningRequest(request.id);
+          await loadSigningRequests();
+        } catch (e: any) {
+          Alert.alert("Couldn't revoke link", e?.message ?? "Please try again.");
+        } finally {
+          setRevoking(null);
+        }
+      } },
+    ]);
+  };
+
   const saveTitle = async () => {
+    if (savingTitle.current) return;
     if (!doc || !titleDraft.trim() || titleDraft.trim() === doc.title) {
       setRenaming(false);
       return;
     }
-    const updated = await api.renameDocument(doc.id, titleDraft.trim());
-    setDoc(updated);
-    setRenaming(false);
-    refresh();
+    savingTitle.current = true;
+    try {
+      const updated = await api.renameDocument(doc.id, titleDraft.trim());
+      setDoc(updated);
+      setRenaming(false);
+      await refresh();
+    } catch (e: any) {
+      Alert.alert("Couldn't rename document", e?.message ?? "Please try again.");
+    } finally {
+      savingTitle.current = false;
+    }
   };
 
   const downloadPdfToCache = async (): Promise<string | null> => {
     if (!doc?.pdf_path) return null;
     const url = await api.fileUrl(doc.pdf_path);
-    const dest = `${FileSystem.cacheDirectory}${doc.title.replace(/[^a-z0-9]+/gi, "_")}.pdf`;
+    const dest = `${FileSystem.cacheDirectory}${doc.id}_${doc.title.replace(/[^a-z0-9]+/gi, "_")}.pdf`;
     const res = await FileSystem.downloadAsync(url, dest);
+    if (res.status < 200 || res.status >= 300) {
+      await FileSystem.deleteAsync(dest, { idempotent: true });
+      throw new Error("Could not download the PDF. Please try again.");
+    }
     return res.uri;
   };
 
@@ -126,19 +156,8 @@ export default function DocumentDetail() {
     }
   };
 
-  const runOcr = async () => {
-    if (!doc) return;
-    setBusy("ocr");
-    try {
-      const result = await api.runOcr(doc.id);
-      setDoc(result.document);
-      const preview = result.text.length > 900 ? `${result.text.slice(0, 900)}...` : result.text;
-      Alert.alert("Text found", preview || "No text found.");
-    } catch (e: any) {
-      Alert.alert("OCR unavailable", e?.message ?? "Try again after the OCR package is installed on the server.");
-    } finally {
-      setBusy(null);
-    }
+  const runOcr = () => {
+    if (doc) router.push('/document/text/' + doc.id);
   };
 
   const exportPdf = async () => {
@@ -156,15 +175,31 @@ export default function DocumentDetail() {
         style: "destructive",
         onPress: async () => {
           setBusy("delete");
-          if (doc) await api.deleteDocument(doc.id);
-          await refresh();
-          router.back();
+          try {
+            if (doc) await api.deleteDocument(doc.id);
+            await refresh();
+            router.back();
+          } catch (e: any) {
+            Alert.alert("Couldn't delete document", e?.message ?? "Please try again.");
+          } finally {
+            setBusy(null);
+          }
         },
       },
     ]);
   };
 
   const insets_bottom = insets.bottom;
+
+  if (!loading && (loadError || !doc)) {
+    return (
+      <View style={[styles.wrap, styles.center, { padding: spacing.lg, gap: spacing.lg }]}>
+        <AppText>{loadError ?? "Document not found."}</AppText>
+        <Pressable accessibilityRole="button" onPress={load}><AppText>Try again</AppText></Pressable>
+        <Pressable accessibilityRole="button" onPress={() => router.back()}><AppText>Go back</AppText></Pressable>
+      </View>
+    );
+  }
 
   if (loading || !doc) {
     return (
@@ -227,6 +262,14 @@ export default function DocumentDetail() {
               <AppText size="xs" color={colors.onSurfaceTertiary} style={{ textTransform: "capitalize" }}>
                 {r.status}
               </AppText>
+              {r.status === "pending" ? (
+                <Pressable accessibilityRole="button" accessibilityLabel={`Revoke signing link for ${r.signer_name}`}
+                  disabled={revoking !== null} onPress={() => revokeRequest(r)}
+                  style={{ padding: spacing.sm, marginLeft: spacing.sm }}>
+                  {revoking === r.id ? <ActivityIndicator size="small" color={colors.error} /> :
+                    <AppText size="xs" color={colors.error}>Revoke</AppText>}
+                </Pressable>
+              ) : null}
             </View>
           ))}
         </View>
@@ -250,7 +293,7 @@ export default function DocumentDetail() {
         <ActionButton icon="paper-plane-outline" label="Request" onPress={() => router.push(`/document/request/${doc.id}`)} testID="request-signature-btn" />
         <ActionButton icon="share-outline" label="Share" onPress={share} loading={busy === "share"} testID="share-btn" />
         <ActionButton icon="mail-outline" label="Email" onPress={emailPdf} loading={busy === "email"} testID="email-btn" />
-        <ActionButton icon="scan-outline" label="OCR" onPress={runOcr} loading={busy === "ocr"} testID="ocr-btn" />
+        <ActionButton icon="scan-outline" label="Get text" onPress={runOcr} loading={busy === "ocr"} testID="ocr-btn" />
         <ActionButton icon="download-outline" label="Export" onPress={exportPdf} loading={busy === "export"} testID="export-btn" />
       </View>
     </View>
@@ -355,3 +398,4 @@ const styles = StyleSheet.create({
   },
   actionBtn: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: spacing.sm },
 });
+

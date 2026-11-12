@@ -14,7 +14,7 @@ below for why almost everything was rewritten.
 cd backend
 python3 -m venv venv && source venv/bin/activate   # optional but recommended
 pip install -r requirements.txt
-cp .env.example .env                                # edit if you want AI auto-fill
+cp .env.example .env                                # AI extraction stays off unless explicitly enabled
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 Visit http://localhost:8000/api/ - you should see `{"message": "DocuALL backend", "ok": true}`.
@@ -35,6 +35,12 @@ Scan the QR code with Expo Go (or press `i` / `a` for a simulator).
 phone itself, not your computer. Open the app's **Settings** tab and set
 the server address to your computer's LAN IP, e.g. `http://192.168.1.23:8000`
 (find it with `ipconfig getifaddr en0` on Mac or `ipconfig` on Windows).
+
+## Privacy defaults
+
+Documents, signatures, and profile details are stored on the DocuALL server in its local data directory. The app does not send document images to an AI service by default. To opt in to AI field extraction, set both `OPENAI_API_KEY` and `DOCUALL_ENABLE_AI_EXTRACTION=true` in the backend environment; the first page of a scanned image is then sent to OpenAI for title/vendor/date/amount suggestions. Keep the flag unset or false to keep that processing off.
+
+The API limits PDF uploads to 25 MB and rejects invalid device IDs before they are used as storage paths. Deleting a document removes its active metadata, referenced local files, and outstanding signing links.
 
 ## Features
 - **Scan**: camera capture with a **flashlight/torch** that's **on by default**

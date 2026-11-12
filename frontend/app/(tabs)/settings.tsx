@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Alert, ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { AppText } from "@/src/components/AppText";
 import { Button } from "@/src/components/Button";
@@ -9,6 +10,7 @@ import { getDeviceId } from "@/src/lib/device-id";
 import { colors, radius, spacing } from "@/src/theme/theme";
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [apiUrl, setApiUrlText] = useState("");
   const [deviceId, setDeviceId] = useState("");
@@ -41,7 +43,11 @@ export default function SettingsScreen() {
         Settings
       </AppText>
 
-      <Section title="Server">
+      <Section title="Membership">
+        <Button title="Plans & purchases" icon="diamond-outline" onPress={() => router.push("/membership")} />
+      </Section>
+
+      {__DEV__ ? <Section title="Server">
         <AppText size="sm" color={colors.onSurfaceTertiary} style={{ marginBottom: spacing.sm }}>
           The address of your DocuALL backend. On a physical device this needs to be your computer's LAN IP, not
           "localhost".
@@ -58,6 +64,8 @@ export default function SettingsScreen() {
         />
         <Button title="Save & test connection" onPress={save} loading={saving} style={{ marginTop: spacing.md }} testID="save-api-url-btn" />
       </Section>
+
+      : null}
 
       <Section title="Saved profile">
         <AppText size="sm" color={colors.onSurfaceTertiary} style={{ marginBottom: spacing.sm }}>
@@ -114,3 +122,4 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: "row", alignItems: "center", paddingVertical: spacing.sm },
 });
+

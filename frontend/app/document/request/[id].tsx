@@ -17,7 +17,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { AppText } from "@/src/components/AppText";
 import { Button } from "@/src/components/Button";
-import { api, DocumentDTO, FieldType, PendingFieldPlacement } from "@/src/lib/api";
+import { api, ApiError, DocumentDTO, FieldType, PendingFieldPlacement } from "@/src/lib/api";
 import { colors, radius, spacing } from "@/src/theme/theme";
 
 interface PlacedField extends PendingFieldPlacement {
@@ -143,7 +143,11 @@ export default function SigningRequestScreen() {
       });
       router.back();
     } catch (e: any) {
-      Alert.alert("Couldn't send", e?.message ?? "Something went wrong");
+      if (e instanceof ApiError && e.status === 402) {
+        Alert.alert("Signature requests are a Pro feature", "Your document and placed fields are still here.", [
+          { text: "Not now", style: "cancel" }, { text: "View plans", onPress: () => router.push("/membership") },
+        ]);
+      } else Alert.alert("Couldn't send", e?.message ?? "Something went wrong");
     } finally {
       setSending(false);
     }
@@ -412,3 +416,4 @@ const styles = StyleSheet.create({
   },
   footer: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
 });
+

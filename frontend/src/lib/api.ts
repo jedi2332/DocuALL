@@ -39,6 +39,9 @@ export interface DocumentDTO {
   thumbnail_path?: string;
   created_at: string;
   updated_at: string;
+  ocr_text?: string;
+  ocr_unread_pages?: number[];
+  ocr_truncated?: boolean;
 }
 
 export interface SignatureDTO {
@@ -77,11 +80,15 @@ export interface SigningRequestDTO {
   id: string;
   doc_id: string;
   signer_name: string;
-  status: "pending" | "completed" | "cancelled";
+  status: "pending" | "completed" | "cancelled" | "expired";
   created_at: string;
   completed_at?: string;
   expires_at?: string;
   url: string;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public status: number) { super(message); }
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -103,7 +110,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       // ignore
     }
-    throw new Error(detail || `Request failed (${res.status})`);
+    throw new ApiError(typeof detail === "string" ? detail : "The request could not be completed.", res.status);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -112,6 +119,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   getApiUrl,
   setApiUrl,
+
+  billingStatus: () => request<import("./billing").BillingStatus>("/billing/status"),
+
+  assembleDocument: (title: string, pages: { document_id: string; page_index: number; rotation: number }[]) =>
+    request<DocumentDTO>("/documents/assemble", { method: "POST", body: JSON.stringify({ title, pages }) }),
 
   listDocuments: () => request<DocumentDTO[]>("/documents"),
   getDocument: (id: string) => request<DocumentDTO>(`/documents/${id}`),
@@ -170,3 +182,4 @@ export const api = {
     return { uri: `${base}/api/documents/${docId}/page/${pageIndex}`, headers: { "X-Device-Id": deviceId } };
   },
 };
+

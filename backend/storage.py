@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -42,8 +43,8 @@ def _load() -> Dict[str, Any]:
         data.setdefault("signing_requests", {})
         data.setdefault("profiles", {})
         return data
-    except (json.JSONDecodeError, OSError):
-        return _empty_db()
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError("Cannot read document database; refusing to overwrite it") from exc
 
 
 def _save(data: Dict[str, Any]) -> None:
@@ -62,13 +63,23 @@ def new_id() -> str:
 # File (blob) storage
 # ---------------------------------------------------------------------------
 def save_file(device_id: str, filename: str, data: bytes) -> str:
-    """Writes bytes to disk and returns a relative path used as the file's id."""
-    device_dir = FILES_DIR / device_id
-    device_dir.mkdir(parents=True, exist_ok=True)
-    rel_path = f"{device_id}/{filename}"
-    with open(FILES_DIR / rel_path, "wb") as f:
+    """Writes bytes inside one owner's directory and returns its relative path."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", device_id):
+        raise ValueError("Invalid device ID")
+    if not filename or Path(filename).name != filename or filename in {".", ".."}:
+        raise ValueError("Invalid filename")
+
+    root = FILES_DIR.resolve()
+    target = (FILES_DIR / device_id / filename).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("Invalid storage path") from exc
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "wb") as f:
         f.write(data)
-    return rel_path
+    return f"{device_id}/{filename}"
 
 
 def read_file(rel_path: str) -> bytes:
@@ -80,10 +91,13 @@ def read_file(rel_path: str) -> bytes:
 
 
 def delete_file(rel_path: str) -> None:
-    full = FILES_DIR / rel_path
+    """Best-effort removal of a file, constrained to the local files root."""
+    root = FILES_DIR.resolve()
+    full = (FILES_DIR / rel_path).resolve()
     try:
-        full.unlink()
-    except OSError:
+        full.relative_to(root)
+        full.unlink(missing_ok=True)
+    except (OSError, ValueError):
         pass
 
 
@@ -131,11 +145,31 @@ def list_documents(owner_id: str) -> List[Dict[str, Any]]:
     return docs
 
 
-def soft_delete_document(doc_id: str, owner_id: str, deleted_at: str) -> bool:
-    doc = get_document(doc_id, owner_id)
-    if not doc:
-        return False
-    update_document(doc_id, {"deleted_at": deleted_at})
+def hard_delete_document(doc_id: str, owner_id: str) -> bool:
+    """Remove a document, its referenced files, and its signing links."""
+    with _lock:
+        data = _load()
+        doc = data["documents"].get(doc_id)
+        if not doc or doc.get("owner_id") != owner_id:
+            return False
+
+        file_paths = list(doc.get("page_paths", []))
+        file_paths.extend([doc.get("pdf_path"), doc.get("thumbnail_path")])
+        data["documents"].pop(doc_id, None)
+        data["signing_requests"] = {
+            req_id: req
+            for req_id, req in data["signing_requests"].items()
+            if not (req.get("doc_id") == doc_id and req.get("owner_id") == owner_id)
+        }
+        _save(data)
+
+    # Delete files after the metadata change so old public links stop working immediately.
+    for rel_path in file_paths:
+        if not rel_path:
+            continue
+        parts = Path(rel_path).parts
+        if len(parts) == 2 and parts[0] == owner_id:
+            delete_file(rel_path)
     return True
 
 
@@ -254,3 +288,19 @@ def update_profile(owner_id: str, patch: dict) -> dict:
         data["profiles"][owner_id] = current
         _save(data)
         return current
+
+
+
+def is_active_file(rel_path: str, owner_id: str) -> bool:
+    """Only serve files referenced by an active record belonging to this owner."""
+    data = _load()
+    for doc in data["documents"].values():
+        if doc.get("owner_id") == owner_id and not doc.get("deleted_at"):
+            paths = [*doc.get("page_paths", []), doc.get("pdf_path"), doc.get("thumbnail_path")]
+            if rel_path in paths:
+                return True
+    return any(
+        sig.get("owner_id") == owner_id and not sig.get("deleted_at")
+        and sig.get("image_path") == rel_path
+        for sig in data["signatures"].values()
+    )

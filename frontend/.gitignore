@@ -7,3 +7,7 @@ web-build/
 ios/
 android/
 *.orig.*
+
+dist-android/
+.env*
+!.env.example
