@@ -90,8 +90,12 @@ export default function ScanScreen() {
       await refresh();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.replace(`/document/${doc.id}`);
-    } catch {
+    } catch (e: any) {
       setSaving(false);
+      Alert.alert(
+        "Couldn't save scan",
+        e?.message ?? "Check the server connection and try again. Your captured pages are still here."
+      );
     }
   };
 
