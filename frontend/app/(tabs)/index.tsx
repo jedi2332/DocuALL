@@ -23,7 +23,8 @@ export default function DocumentsHome() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return documents;
-    return documents.filter((d) => `${d.title} ${d.vendor ?? ""}`.toLowerCase().includes(q));
+    return documents.filter((d) => [d.title, d.vendor, d.category, d.doc_date, d.amount, d.ocr_text]
+      .some((value) => (value ?? "").toLowerCase().includes(q)));
   }, [documents, query]);
 
   const importPhotos = async () => {
@@ -40,6 +41,9 @@ export default function DocumentsHome() {
       const pages = res.assets
         .filter((a) => !!a.base64)
         .map((a) => ({ base64: a.base64 as string, enhance: false }));
+      if (pages.length !== res.assets.length || !pages.length) {
+        throw new Error("One or more photos couldn't be read. Select them again or try a smaller batch.");
+      }
       await api.createDocument(pages);
       await refresh();
     } catch (e: any) {
