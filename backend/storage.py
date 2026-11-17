@@ -112,12 +112,21 @@ def create_document(doc: Dict[str, Any]) -> Dict[str, Any]:
         return doc
 
 
-def update_document(doc_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def update_document(doc_id: str, patch: Dict[str, Any], owner_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Apply a patch atomically only to an active document belonging to owner_id.
+
+    owner_id is optional for legacy internal callers. API routes must supply it.
+    """
     with _lock:
         data = _load()
         doc = data["documents"].get(doc_id)
-        if not doc:
+        if not doc or doc.get("deleted_at"):
             return None
+        if owner_id is not None and doc.get("owner_id") != owner_id:
+            return None
+        # Never allow callers to reassign ownership, revive deleted records or rewrite IDs.
+        if any(key in patch for key in ("id", "owner_id", "deleted_at")):
+            raise ValueError("Protected document field")
         doc.update(patch)
         data["documents"][doc_id] = doc
         _save(data)
