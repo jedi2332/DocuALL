@@ -9,6 +9,7 @@ Run with:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 import base64
+import binascii
 import logging
 import os
 import secrets
@@ -180,10 +181,21 @@ def _require_doc(doc_id: str, device_id: str) -> dict:
     return doc
 
 
+MAX_SCANNED_PAGE_BYTES = 12 * 1024 * 1024
+MAX_PDF_UPLOAD_BYTES = 25 * 1024 * 1024
+
 def _decode_b64(b64: str) -> bytes:
     if "," in b64 and b64.strip().startswith("data:"):
         b64 = b64.split(",", 1)[1]
-    return base64.b64decode(b64)
+    if len(b64) > (MAX_SCANNED_PAGE_BYTES * 4 // 3 + 8):
+        raise HTTPException(status_code=413, detail="Scan page exceeds 12 MB")
+    try:
+        page = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid scan page encoding")
+    if len(page) > MAX_SCANNED_PAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Scan page exceeds 12 MB")
+    return page
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +266,8 @@ async def create_document(payload: DocumentCreate, x_device_id: str = Header(...
     """Creates a document from freshly scanned/imported photo pages."""
     if not payload.pages:
         raise HTTPException(status_code=400, detail="No pages provided")
+    if len(payload.pages) > 100:
+        raise HTTPException(status_code=413, detail="Limit is 100 pages per document")
 
     page_bytes_list = [
         pdf_utils.decode_and_process_page(_decode_b64(p.base64), p.enhance, p.grayscale) for p in payload.pages
@@ -303,14 +317,31 @@ async def import_pdf(
     x_device_id: str = Header(...),
 ):
     """Imports an existing PDF file as-is (used for the "Import PDF" action)."""
-    raw = await file.read()
+    # Stream with a hard limit instead of unbounded UploadFile.read().
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_PDF_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="PDF exceeds 25 MB")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
+    if not raw[:1024].lstrip().startswith(b"%PDF-"):
+        raise HTTPException(status_code=415, detail="Uploaded file is not a PDF")
+    try:
+        page_count = pdf_utils.pdf_page_count(raw)
+        if page_count < 1:
+            raise ValueError("PDF has no pages")
+    except Exception:
+        raise HTTPException(status_code=422, detail="PDF is damaged or cannot be read")
 
     ts = storage.new_id()
     pdf_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}.pdf", raw)
-
-    page_count = pdf_utils.pdf_page_count(raw)
     rendered = pdf_utils.render_page_as_image(raw, 0)
     thumb_bytes = pdf_utils.make_thumbnail(rendered) if rendered else pdf_utils.generic_pdf_thumbnail()
     thumb_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}_thumb.jpg", thumb_bytes)
