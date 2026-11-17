@@ -9,18 +9,19 @@ Run with:
     uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 """
 import base64
+import binascii
 import logging
 import os
 import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, APIRouter, Header, HTTPException, Query, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import pdf_utils
@@ -32,6 +33,9 @@ load_dotenv(ROOT_DIR / ".env")
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 APP_NAME = "docuall"
+MAX_PDF_BYTES = 20 * 1024 * 1024
+MAX_SCAN_IMAGE_BYTES = 12 * 1024 * 1024
+MAX_SCANNED_PAGES = 20
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("docuall")
@@ -54,7 +58,7 @@ class PageInput(BaseModel):
 
 
 class DocumentCreate(BaseModel):
-    pages: List[PageInput]
+    pages: List[PageInput] = Field(min_length=1, max_length=MAX_SCANNED_PAGES)
     title: Optional[str] = None
 
 
@@ -63,48 +67,48 @@ class DocumentUpdate(BaseModel):
 
 
 class SignatureCreate(BaseModel):
-    kind: str = "draw"  # draw | type
+    kind: Literal["draw", "type"] = "draw"
     strokes: Optional[List[List[dict]]] = None
-    aspect: float = 2.5
-    stroke_width: int = 6
-    text: Optional[str] = None
+    aspect: float = Field(default=2.5, ge=0.2, le=10)
+    stroke_width: int = Field(default=6, ge=1, le=30)
+    text: Optional[str] = Field(default=None, max_length=200)
 
 
 class SignPlacement(BaseModel):
     signature_id: str
-    page_index: int = 0
-    x: float  # fraction of page width, top-left anchored
-    y: float  # fraction of page height, top-left anchored
-    w: float  # fraction of page width the signature should be drawn at
+    page_index: int = Field(default=0, ge=0)
+    x: float = Field(ge=0, le=1)  # fraction of page width
+    y: float = Field(ge=0, le=1)  # fraction of page height
+    w: float = Field(gt=0, le=1)  # fraction of page width
 
 
 class FieldPlacement(BaseModel):
-    type: str  # signature | initials | date | text
-    page_index: int = 0
-    x: float  # fraction of page width, top-left anchored
-    y: float  # fraction of page height, top-left anchored
-    w: float  # image fields: fraction of page width. text/date fields: fraction of page height (font size)
-    signature_id: Optional[str] = None  # required for signature / initials
-    text: Optional[str] = None  # required for date / text
+    type: Literal["signature", "initials", "date", "text"]
+    page_index: int = Field(default=0, ge=0)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    signature_id: Optional[str] = None
+    text: Optional[str] = Field(default=None, max_length=500)
 
 
 class ApplyFields(BaseModel):
-    fields: List[FieldPlacement]
+    fields: List[FieldPlacement] = Field(max_length=200)
 
 
 class PendingFieldIn(BaseModel):
-    type: str  # signature | initials | date | text
-    page_index: int = 0
-    x: float
-    y: float
-    w: float
-    label: Optional[str] = None
+    type: Literal["signature", "initials", "date", "text"]
+    page_index: int = Field(default=0, ge=0)
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    w: float = Field(gt=0, le=1)
+    label: Optional[str] = Field(default=None, max_length=200)
 
 
 class SigningRequestCreate(BaseModel):
-    signer_name: str
-    fields: List[PendingFieldIn]
-    expiry_days: Optional[int] = 30
+    signer_name: str = Field(min_length=1, max_length=200)
+    fields: List[PendingFieldIn] = Field(min_length=1, max_length=200)
+    expiry_days: Optional[int] = Field(default=30, ge=0, le=365)
 
 
 class SigningRequestOut(BaseModel):
@@ -119,16 +123,16 @@ class SigningRequestOut(BaseModel):
 
 
 class FilledFieldIn(BaseModel):
-    id: str  # matches the pending field's id assigned when the request was created
-    kind: str  # draw | type | text
+    id: str
+    kind: Literal["draw", "type", "text"]
     strokes: Optional[List[List[dict]]] = None
-    aspect: Optional[float] = None
-    stroke_width: Optional[int] = None
-    text: Optional[str] = None
+    aspect: Optional[float] = Field(default=None, ge=0.2, le=10)
+    stroke_width: Optional[int] = Field(default=None, ge=1, le=30)
+    text: Optional[str] = Field(default=None, max_length=500)
 
 
 class CompleteSigningRequest(BaseModel):
-    fields: List[FilledFieldIn]
+    fields: List[FilledFieldIn] = Field(min_length=1, max_length=200)
 
 
 class ProfileUpdate(BaseModel):
@@ -183,7 +187,16 @@ def _require_doc(doc_id: str, device_id: str) -> dict:
 def _decode_b64(b64: str) -> bytes:
     if "," in b64 and b64.strip().startswith("data:"):
         b64 = b64.split(",", 1)[1]
-    return base64.b64decode(b64)
+    # Check the encoded length before allocating a potentially enormous buffer.
+    if len(b64) > ((MAX_SCAN_IMAGE_BYTES + 2) // 3) * 4 + 4:
+        raise HTTPException(status_code=413, detail="Scan image exceeds 12 MB")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid scan image encoding")
+    if len(raw) > MAX_SCAN_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Scan image exceeds 12 MB")
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +268,14 @@ async def create_document(payload: DocumentCreate, x_device_id: str = Header(...
     if not payload.pages:
         raise HTTPException(status_code=400, detail="No pages provided")
 
-    page_bytes_list = [
-        pdf_utils.decode_and_process_page(_decode_b64(p.base64), p.enhance, p.grayscale) for p in payload.pages
-    ]
+    page_bytes_list = []
+    for p in payload.pages:
+        try:
+            page_bytes_list.append(pdf_utils.decode_and_process_page(_decode_b64(p.base64), p.enhance, p.grayscale))
+        except HTTPException:
+            raise
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid or unreadable scan image") from exc
     fields = await extract_fields(payload.pages[0].base64)
 
     ts = storage.new_id()
@@ -303,14 +321,20 @@ async def import_pdf(
     x_device_id: str = Header(...),
 ):
     """Imports an existing PDF file as-is (used for the "Import PDF" action)."""
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Empty file")
+    raw = await file.read(MAX_PDF_BYTES + 1)
+    if len(raw) > MAX_PDF_BYTES:
+        raise HTTPException(status_code=413, detail="PDF exceeds 20 MB")
+    if not raw.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Not a PDF file")
+    try:
+        page_count = pdf_utils.pdf_page_count(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Unreadable or encrypted PDF") from exc
+    if page_count < 1 or page_count > 200:
+        raise HTTPException(status_code=400, detail="PDF must have 1 to 200 pages")
 
     ts = storage.new_id()
     pdf_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}.pdf", raw)
-
-    page_count = pdf_utils.pdf_page_count(raw)
     rendered = pdf_utils.render_page_as_image(raw, 0)
     thumb_bytes = pdf_utils.make_thumbnail(rendered) if rendered else pdf_utils.generic_pdf_thumbnail()
     thumb_path = await run_in_threadpool(storage.save_file, x_device_id, f"{ts}_thumb.jpg", thumb_bytes)
@@ -552,6 +576,9 @@ async def create_signing_request(doc_id: str, payload: SigningRequestCreate, req
     if not payload.signer_name.strip():
         raise HTTPException(status_code=400, detail="Signer name is required")
 
+    doc = _require_doc(doc_id, x_device_id)
+    if any(f.page_index >= doc["page_count"] for f in payload.fields):
+        raise HTTPException(status_code=400, detail="Signing field has invalid page index")
     fields = [{**f.model_dump(), "id": storage.new_id()} for f in payload.fields]
     req = storage.create_signing_request(
         {
@@ -616,9 +643,13 @@ async def get_public_signing_request_page(token: str, page_index: int):
         if req.get("status") == "pending":
             storage.update_signing_request(req["id"], {"status": "expired"})
         raise HTTPException(status_code=410, detail="This signing link has expired")
+    if req.get("status") in ("cancelled", "expired"):
+        raise HTTPException(status_code=410, detail="This signing link is no longer active")
     doc = storage.get_document(req["doc_id"], req["owner_id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    if page_index < 0 or page_index >= doc["page_count"]:
+        raise HTTPException(status_code=404, detail="Page not found")
 
     if doc.get("kind") == "imported":
         pdf_bytes = await run_in_threadpool(storage.read_file, doc["pdf_path"])
@@ -644,16 +675,16 @@ async def complete_signing_request(token: str, payload: CompleteSigningRequest):
             storage.update_signing_request(req["id"], {"status": "expired"})
         raise HTTPException(status_code=410, detail="This signing link has expired")
     if req["status"] != "pending":
-        raise HTTPException(status_code=400, detail="This document has already been signed")
+        raise HTTPException(status_code=400, detail="This signing link is no longer active")
 
     doc = storage.get_document(req["doc_id"], req["owner_id"])
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
     filled_by_id = {f.id: f for f in payload.fields}
-    missing = [f["id"] for f in req["fields"] if f["id"] not in filled_by_id]
-    if missing:
-        raise HTTPException(status_code=400, detail="Every field must be filled in before completing")
+    expected_ids = {f["id"] for f in req["fields"]}
+    if len(filled_by_id) != len(payload.fields) or set(filled_by_id) != expected_ids:
+        raise HTTPException(status_code=400, detail="Exactly the requested fields must be completed")
 
     resolved: List[dict] = []
     for pending in req["fields"]:
@@ -664,10 +695,14 @@ async def complete_signing_request(token: str, payload: CompleteSigningRequest):
                 if not filled.strokes:
                     raise HTTPException(status_code=400, detail=f"Missing drawn {pending['type']}")
                 item["image"] = pdf_utils.render_drawn_signature(filled.strokes, filled.aspect or 2.5, filled.stroke_width or 6)
+            elif filled.kind == "type" and (filled.text or "").strip():
+                item["image"] = pdf_utils.render_typed_signature(filled.text)
             else:
-                item["image"] = pdf_utils.render_typed_signature(filled.text or req["signer_name"])
+                raise HTTPException(status_code=400, detail=f"Missing {pending['type']}")
         else:
-            item["text"] = filled.text or ""
+            if filled.kind != "text" or not (filled.text or "").strip():
+                raise HTTPException(status_code=400, detail=f"Missing {pending['type']} text")
+            item["text"] = filled.text
         resolved.append(item)
 
     await _apply_resolved_fields(doc, resolved, req["owner_id"])
@@ -684,6 +719,8 @@ async def signer_page(token: str):
 async def get_document_page_image(doc_id: str, page_index: int, x_device_id: str = Header(...)):
     """Returns a JPEG for one page, used by the sign-placement screen."""
     doc = _require_doc(doc_id, x_device_id)
+    if page_index < 0 or page_index >= doc["page_count"]:
+        raise HTTPException(status_code=404, detail="Page not found")
     if doc.get("kind") == "imported":
         pdf_bytes = await run_in_threadpool(storage.read_file, doc["pdf_path"])
         rendered = await run_in_threadpool(pdf_utils.render_page_as_image, pdf_bytes, page_index)
@@ -734,6 +771,10 @@ async def delete_signature(sig_id: str, x_device_id: str = Header(...)):
 # ---------------------------------------------------------------------------
 @api_router.get("/files/{file_path:path}")
 async def serve_file(file_path: str, device: str = Query(...)):
+    try:
+        storage.validate_device_id(device)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid device ID")
     if not file_path.startswith(f"{device}/"):
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
@@ -745,6 +786,18 @@ async def serve_file(file_path: str, device: str = Query(...)):
 
 
 app.include_router(api_router)
+
+
+@app.middleware("http")
+async def check_device_header(request: Request, call_next):
+    device_id = request.headers.get("x-device-id")
+    if device_id is not None:
+        try:
+            storage.validate_device_id(device_id)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid device ID"})
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
