@@ -1,8 +1,6 @@
 """DocuALL regression tests. Run: cd backend && python -m unittest discover -s tests -v"""
 import asyncio
-import base64
 import io
-import json
 import tempfile
 import unittest
 from pathlib import Path
