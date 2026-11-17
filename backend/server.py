@@ -782,7 +782,7 @@ async def serve_file(file_path: str, device: str = Query(...)):
     except (FileNotFoundError, OSError, ValueError):
         raise HTTPException(status_code=404, detail="File not found")
     ctype = "application/pdf" if file_path.endswith(".pdf") else "image/jpeg" if file_path.endswith(".jpg") else "image/png"
-    return Response(content=content, media_type=ctype)
+    return Response(content=content, media_type=ctype, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 app.include_router(api_router)
