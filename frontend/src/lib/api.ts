@@ -39,6 +39,7 @@ export interface DocumentDTO {
   thumbnail_path?: string;
   created_at: string;
   updated_at: string;
+  ocr_text?: string;
 }
 
 export interface SignatureDTO {
