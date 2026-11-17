@@ -67,16 +67,22 @@ export default function DocumentDetail() {
       setRenaming(false);
       return;
     }
-    const updated = await api.renameDocument(doc.id, titleDraft.trim());
-    setDoc(updated);
-    setRenaming(false);
-    refresh();
+    try {
+      const updated = await api.renameDocument(doc.id, titleDraft.trim());
+      setDoc(updated);
+      setRenaming(false);
+      void refresh();
+    } catch (e: any) {
+      Alert.alert("Couldn't rename document", e?.message ?? "Try again.");
+    }
   };
 
   const downloadPdfToCache = async (): Promise<string | null> => {
     if (!doc?.pdf_path) return null;
     const url = await api.fileUrl(doc.pdf_path);
-    const dest = `${FileSystem.cacheDirectory}${doc.title.replace(/[^a-z0-9]+/gi, "_")}.pdf`;
+    // Unique per document: identically named scans must never overwrite one another.
+    const safeName = doc.title.replace(/[^a-z0-9]+/gi, "_").slice(0, 48) || "document";
+    const dest = `${FileSystem.cacheDirectory}${safeName}_${doc.id}.pdf`;
     const res = await FileSystem.downloadAsync(url, dest);
     return res.uri;
   };
@@ -156,9 +162,15 @@ export default function DocumentDetail() {
         style: "destructive",
         onPress: async () => {
           setBusy("delete");
-          if (doc) await api.deleteDocument(doc.id);
-          await refresh();
-          router.back();
+          try {
+            if (doc) await api.deleteDocument(doc.id);
+            await refresh();
+            router.back();
+          } catch (e: any) {
+            Alert.alert("Couldn't delete document", e?.message ?? "Try again. The document is still available.");
+          } finally {
+            setBusy(null);
+          }
         },
       },
     ]);

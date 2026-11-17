@@ -14,10 +14,38 @@ export async function getApiUrl(): Promise<string> {
   return cachedBaseUrl;
 }
 
-export async function setApiUrl(url: string): Promise<void> {
+export function normalizeApiUrl(url: string): string {
   const trimmed = url.trim().replace(/\/+$/, "");
-  cachedBaseUrl = trimmed;
+  if (!/^https?:\/\/[^\s/?#]+$/i.test(trimmed)) {
+    throw new Error("Enter a complete server address, such as http://192.168.1.10:8000");
+  }
+  return trimmed;
+}
+
+export async function testApiUrl(url: string): Promise<void> {
+  const base = normalizeApiUrl(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(`${base}/api/`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const info = await res.json();
+    if (info?.ok !== true || info?.message !== "DocuALL backend") {
+      throw new Error("This address does not appear to be a DocuALL server");
+    }
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Connection timed out after 8 seconds");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function setApiUrl(url: string): Promise<void> {
+  const trimmed = normalizeApiUrl(url);
+  // Do not switch the active server until persistence succeeds.
   await AsyncStorage.setItem(API_URL_KEY, trimmed);
+  cachedBaseUrl = trimmed;
 }
 
 export interface DocPage {
@@ -112,6 +140,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   getApiUrl,
   setApiUrl,
+  testApiUrl,
 
   listDocuments: () => request<DocumentDTO[]>("/documents"),
   getDocument: (id: string) => request<DocumentDTO>(`/documents/${id}`),

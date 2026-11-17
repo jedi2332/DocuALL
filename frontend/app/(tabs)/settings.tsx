@@ -25,11 +25,11 @@ export default function SettingsScreen() {
   const save = async () => {
     setSaving(true);
     try {
+      await api.testApiUrl(apiUrl);
       await api.setApiUrl(apiUrl);
-      await api.listDocuments();
       Alert.alert("Saved", "Connected to the DocuALL server.");
     } catch (e: any) {
-      Alert.alert("Saved, but couldn't connect", e?.message ?? "Check the URL and that the backend is running.");
+      Alert.alert("Not saved", e?.message ?? "Check the URL and that the backend is running. Your previous server address is unchanged.");
     } finally {
       setSaving(false);
     }

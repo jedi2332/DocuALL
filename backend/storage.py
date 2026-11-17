@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -62,12 +63,21 @@ def new_id() -> str:
 # File (blob) storage
 # ---------------------------------------------------------------------------
 def save_file(device_id: str, filename: str, data: bytes) -> str:
-    """Writes bytes to disk and returns a relative path used as the file's id."""
-    device_dir = FILES_DIR / device_id
+    """Save only under the device's own directory; no traversal or separators.
+
+    Device identifiers are client-provided, not trusted filesystem paths.
+    """
+    if not isinstance(device_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", device_id):
+        raise ValueError("Invalid device ID")
+    if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,180}", filename) or filename in (".", ".."):
+        raise ValueError("Invalid filename")
+    device_dir = (FILES_DIR / device_id).resolve()
+    if device_dir.parent != FILES_DIR.resolve():
+        raise ValueError("Invalid storage path")
     device_dir.mkdir(parents=True, exist_ok=True)
     rel_path = f"{device_id}/{filename}"
-    with open(FILES_DIR / rel_path, "wb") as f:
-        f.write(data)
+    with open(device_dir / filename, "wb") as file:
+        file.write(data)
     return rel_path
 
 
@@ -80,7 +90,9 @@ def read_file(rel_path: str) -> bytes:
 
 
 def delete_file(rel_path: str) -> None:
-    full = FILES_DIR / rel_path
+    full = (FILES_DIR / rel_path).resolve()
+    if FILES_DIR.resolve() not in full.parents:
+        raise ValueError("Invalid storage path")
     try:
         full.unlink()
     except OSError:
@@ -132,11 +144,15 @@ def list_documents(owner_id: str) -> List[Dict[str, Any]]:
 
 
 def soft_delete_document(doc_id: str, owner_id: str, deleted_at: str) -> bool:
-    doc = get_document(doc_id, owner_id)
-    if not doc:
-        return False
-    update_document(doc_id, {"deleted_at": deleted_at})
-    return True
+    # Ownership and mutation must occur under the same lock.
+    with _lock:
+        data = _load()
+        doc = data["documents"].get(doc_id)
+        if not doc or doc.get("owner_id") != owner_id or doc.get("deleted_at"):
+            return False
+        doc["deleted_at"] = deleted_at
+        _save(data)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -172,15 +188,14 @@ def list_signatures(owner_id: str) -> List[Dict[str, Any]]:
 
 
 def soft_delete_signature(sig_id: str, owner_id: str, deleted_at: str) -> bool:
-    data = _load()
-    sig = data["signatures"].get(sig_id)
-    if not sig or sig.get("owner_id") != owner_id:
-        return False
     with _lock:
         data = _load()
-        data["signatures"][sig_id]["deleted_at"] = deleted_at
+        sig = data["signatures"].get(sig_id)
+        if not sig or sig.get("owner_id") != owner_id or sig.get("deleted_at"):
+            return False
+        sig["deleted_at"] = deleted_at
         _save(data)
-    return True
+        return True
 
 
 # ---------------------------------------------------------------------------
