@@ -382,7 +382,9 @@ async def get_document(doc_id: str, x_device_id: str = Header(...)):
 @api_router.patch("/documents/{doc_id}", response_model=DocumentOut)
 async def rename_document(doc_id: str, payload: DocumentUpdate, x_device_id: str = Header(...)):
     _require_doc(doc_id, x_device_id)
-    doc = storage.update_document(doc_id, {"title": payload.title.strip(), "updated_at": now_iso()})
+    doc = storage.update_document(doc_id, {"title": payload.title.strip(), "updated_at": now_iso()}, owner_id=x_device_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
     return _doc_out(doc)
 
 
@@ -431,7 +433,10 @@ async def _apply_resolved_fields(doc: dict, resolved: List[dict], device_id: str
         pdf_bytes = await run_in_threadpool(storage.read_file, doc["pdf_path"])
         new_pdf = await run_in_threadpool(pdf_utils.composite_fields_on_pdf, pdf_bytes, resolved)
         pdf_path = await run_in_threadpool(storage.save_file, device_id, f"{ts}_signed.pdf", new_pdf)
-        return storage.update_document(doc["id"], {"pdf_path": pdf_path, "updated_at": now_iso()})
+        updated = storage.update_document(doc["id"], {"pdf_path": pdf_path, "updated_at": now_iso()}, owner_id=device_id)
+    if updated is None:
+        raise HTTPException(status_code=409, detail="Document changed during signing")
+    return updated
 
     # scanned document: composite each affected page's fields in one pass, then rebuild the pdf
     page_paths = list(doc.get("page_paths", []))
@@ -457,7 +462,10 @@ async def _apply_resolved_fields(doc: dict, resolved: List[dict], device_id: str
         thumb = pdf_utils.make_thumbnail(new_first_page_bytes)
         patch["thumbnail_path"] = await run_in_threadpool(storage.save_file, device_id, f"{ts}_thumb.jpg", thumb)
 
-    return storage.update_document(doc["id"], patch)
+    updated = storage.update_document(doc["id"], patch, owner_id=device_id)
+    if updated is None:
+        raise HTTPException(status_code=409, detail="Document changed during signing")
+    return updated
 
 
 @api_router.post("/documents/{doc_id}/apply-fields", response_model=DocumentOut)
@@ -529,7 +537,9 @@ async def run_ocr(doc_id: str, x_device_id: str = Header(...)):
             logger.warning("OCR failed: %s", exc)
     if not text:
         raise HTTPException(status_code=422, detail="No readable text was found in this document")
-    updated = storage.update_document(doc_id, {"ocr_text": text, "updated_at": now_iso()})
+    updated = storage.update_document(doc_id, {"ocr_text": text, "updated_at": now_iso()}, owner_id=x_device_id)
+    if updated is None:
+        raise HTTPException(status_code=409, detail="Document changed during OCR")
     return {"text": text, "document": _doc_out(updated)}
 
 

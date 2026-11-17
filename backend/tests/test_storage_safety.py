@@ -45,6 +45,17 @@ class StorageSafetyTests(unittest.TestCase):
         self.assertFalse(storage.soft_delete_document(doc["id"], "alice", "2026-11-18"))
         self.assertIsNone(storage.get_document(doc["id"], "alice"))
 
+    def test_atomic_owned_updates_reject_other_owner_and_deleted_documents(self):
+        doc = storage.create_document({"owner_id": "alice", "title": "Original", "deleted_at": None})
+        self.assertIsNone(storage.update_document(doc["id"], {"title": "Stolen"}, owner_id="bob"))
+        self.assertEqual(storage.get_document(doc["id"], "alice")["title"], "Original")
+        self.assertEqual(storage.update_document(doc["id"], {"title": "Mine"}, owner_id="alice")["title"], "Mine")
+        for field, value in (("owner_id", "bob"), ("deleted_at", None), ("id", "fake")):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                storage.update_document(doc["id"], {field: value}, owner_id="alice")
+        self.assertTrue(storage.soft_delete_document(doc["id"], "alice", "2026-11-17"))
+        self.assertIsNone(storage.update_document(doc["id"], {"title": "Resurrected"}, owner_id="alice"))
+
     def test_deleted_signature_cannot_be_deleted_again(self):
         sig = storage.create_signature({"owner_id": "alice", "deleted_at": None})
         self.assertFalse(storage.soft_delete_signature(sig["id"], "bob", "2026-11-17"))
