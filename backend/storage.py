@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import uuid
 from pathlib import Path
@@ -25,6 +26,25 @@ FILES_DIR = DATA_DIR / "files"
 DB_PATH = DATA_DIR / "db.json"
 
 _lock = threading.Lock()
+
+# Device IDs are generated as UUIDs in the Expo client. Never allow a
+# caller-provided header to become a relative or absolute directory path.
+_DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
+
+
+def validate_device_id(device_id: str) -> str:
+    if not isinstance(device_id, str) or not _DEVICE_ID_PATTERN.fullmatch(device_id):
+        raise ValueError("Invalid device ID")
+    return device_id
+
+
+def _safe_file_path(rel_path: str) -> Path:
+    base = FILES_DIR.resolve()
+    path = (base / rel_path).resolve()
+    if base not in path.parents:
+        raise ValueError("Unsafe file path")
+    return path
 
 
 def _empty_db() -> Dict[str, Any]:
@@ -42,8 +62,10 @@ def _load() -> Dict[str, Any]:
         data.setdefault("signing_requests", {})
         data.setdefault("profiles", {})
         return data
-    except (json.JSONDecodeError, OSError):
-        return _empty_db()
+    except (json.JSONDecodeError, OSError) as exc:
+        # Returning an empty DB here means the next write silently destroys
+        # every document, signature, and signing request. Fail closed instead.
+        raise RuntimeError("DocuALL metadata is unreadable; refusing to overwrite it") from exc
 
 
 def _save(data: Dict[str, Any]) -> None:
@@ -51,6 +73,8 @@ def _save(data: Dict[str, Any]) -> None:
     tmp = DB_PATH.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
     tmp.replace(DB_PATH)
 
 
@@ -63,24 +87,25 @@ def new_id() -> str:
 # ---------------------------------------------------------------------------
 def save_file(device_id: str, filename: str, data: bytes) -> str:
     """Writes bytes to disk and returns a relative path used as the file's id."""
-    device_dir = FILES_DIR / device_id
-    device_dir.mkdir(parents=True, exist_ok=True)
+    validate_device_id(device_id)
+    if not _FILE_NAME_PATTERN.fullmatch(filename) or filename in (".", ".."):
+        raise ValueError("Invalid file name")
     rel_path = f"{device_id}/{filename}"
-    with open(FILES_DIR / rel_path, "wb") as f:
+    full_path = _safe_file_path(rel_path)
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(full_path, "wb") as f:
         f.write(data)
     return rel_path
 
 
 def read_file(rel_path: str) -> bytes:
-    full = (FILES_DIR / rel_path).resolve()
-    if FILES_DIR.resolve() not in full.parents and full != FILES_DIR.resolve():
-        raise FileNotFoundError(rel_path)
+    full = _safe_file_path(rel_path)
     with open(full, "rb") as f:
         return f.read()
 
 
 def delete_file(rel_path: str) -> None:
-    full = FILES_DIR / rel_path
+    full = _safe_file_path(rel_path)
     try:
         full.unlink()
     except OSError:
