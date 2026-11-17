@@ -779,7 +779,7 @@ async def serve_file(file_path: str, device: str = Query(...)):
         raise HTTPException(status_code=403, detail="Forbidden")
     try:
         content = await run_in_threadpool(storage.read_file, file_path)
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, ValueError):
         raise HTTPException(status_code=404, detail="File not found")
     ctype = "application/pdf" if file_path.endswith(".pdf") else "image/jpeg" if file_path.endswith(".jpg") else "image/png"
     return Response(content=content, media_type=ctype)
